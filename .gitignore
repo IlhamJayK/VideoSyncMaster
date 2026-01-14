@@ -1,0 +1,102 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Env & Portable Python ---
+venv/
+env/
+ENV/
+python/
+backend/python/
+backend/ffmpeg/
+
+# --- Models & Large Files (CRITICAL) ---
+models/
+backend/models/
+*.pth
+*.pt
+*.bin
+*.ckpt
+*.safetensors
+*.onnx
+*.gguf
+
+# --- Logs & Debug ---
+*.log
+logs/
+backend_debug.log
+_debug_raw.json
+_debug_final.json
+
+# --- Output & Cache ---
+output/
+.cache/
+backend/.cache/
+ui/.cache/
+
+# --- Video & Audio Data ---
+*.mp4
+*.wav
+*.mp3
+*.flac
+*.mkv
+*.avi
+*.mov
+
+# --- Electron / Node.js ---
+node_modules/
+ui/node_modules/
+ui/dist/
+ui/dist-electron/
+ui/release/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# --- IDEs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- OS Generated ---
+.DS_Store
+Thumbs.db
+
+# --- Project Specific ---
+# Exclude the specific output folder pattern user uses
+*_segments/
+ref_*.wav
+tts_*.wav
+
+# --- Installer ---
+*.exe
+setup_script.iss
+# Keep the iss if it is a template, but usually we exclude generated ones. 
+# If setup_script.iss is source code, KEEP IT. If generated, IGNORE IT.
+# Assuming it is source based on our edits. keeping it.
+
+# --- Private Build Scripts ---
+package.py
+
+voice-pro/

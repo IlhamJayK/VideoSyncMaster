@@ -1,0 +1,34 @@
+torch
+openai-whisper
+librosa
+soundfile
+numpy
+whisperx
+munch
+descript-audiotools
+accelerate
+tiktoken
+scipy
+json5
+whisperx
+munch
+descript-audiotools
+cn2an==0.5.22
+cython==3.0.7
+einops>=0.8.1
+g2p-en==2.1.0
+jieba==0.42.1
+keras==2.9.0
+matplotlib==3.8.2
+modelscope==1.27.0
+numba==0.58.1
+omegaconf>=2.3.0
+opencv-python==4.9.0.80
+pandas==2.3.2
+safetensors==0.5.2
+sentencepiece>=0.2.1
+tensorboard==2.9.1
+textstat>=0.7.10
+tokenizers==0.21.0
+wetext>=0.0.9; sys_platform != 'linux'
+WeTextProcessing; sys_platform == 'linux'
