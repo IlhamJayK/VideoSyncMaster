@@ -553,27 +553,26 @@ def main():
                             print(json.dumps(result_data))
                         return
                     
-                    # 2. Translate text (if target != source, for now always translate)
-                    translator = LLMTranslator()
-                    translated_text = translator.translate(text, target_lang)
+                    # 2. Use provided text directly (Do NOT re-translate, to respect user edits)
+                    translated_text = text
                     
                     if not translated_text:
-                        result_data = {"success": False, "error": "Translation failed"}
+                        result_data = {"success": False, "error": "No text provided"}
                     else:
                         # 3. Generate TTS
                         success = run_tts(translated_text, ref_clip_path, output_audio, language=target_lang)
                         
                         # 4. Cleanup ref
                         try:
-                            os.remove(ref_clip_path)
+                            if os.path.exists(ref_clip_path):
+                                os.remove(ref_clip_path)
                         except:
                             pass
                         
+                        if success:
                             result_data = {"success": True, "audio_path": output_audio, "text": translated_text}
                         else:
                             result_data = {"success": False, "error": "TTS generation failed"}
-                    
-                    translator.cleanup()
             except Exception as e:
                 result_data = {"success": False, "error": str(e)}
         else:
