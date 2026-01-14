@@ -24,7 +24,7 @@ No cloud APIs, no subscription fees. Use your local GPU to perform **ASR (Speech
 
 *   **🗣️ One-Shot Voice Cloning**
     *   Integrated with **MaskGCT** (IndexTTS), requiring no fine-tuning.
-    *   Clones source voices instantly using just 3-10 seconds of reference audio.
+    *   Clones source voices instantly using reference audio.
     *   Perfectly preserves tone, emotion, and speech rhythm.
 
 *   **🌏 Powerful LLM (Translation)**
