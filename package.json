@@ -1,0 +1,21 @@
+{
+    "name": "videosync-root",
+    "version": "1.0.0",
+    "description": "Root package for VideoSync project management",
+    "private": true,
+    "scripts": {
+        "dev": "cd ui && npm run dev",
+        "build": "cd ui && npm run build",
+        "install:ui": "cd ui && npm install",
+        "lint": "cd ui && npm run lint",
+        "preview": "cd ui && npm run preview"
+    },
+    "keywords": [
+        "videosync",
+        "electron",
+        "ai",
+        "dubbing"
+    ],
+    "author": "VideoSync Team",
+    "license": "MIT"
+}
