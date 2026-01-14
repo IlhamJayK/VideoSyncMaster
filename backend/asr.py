@@ -49,6 +49,16 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
         if not words:
             continue
             
+        # SANITIZER: Cap word duration
+        # WhisperX sometimes hallucinates 5s+ duration for the last word.
+        # We cap it to 1.5s max per character/word.
+        for w in words:
+            if "start" in w and "end" in w:
+                dur = w["end"] - w["start"]
+                if dur > 1.5:
+                    w["end"] = w["start"] + 1.5
+
+            
         vad_start = vad_seg["start"]
         vad_end = vad_seg["end"]
         
@@ -132,8 +142,10 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
                     break
             
             if idx == 0:
-                if c_start > vad_start:
-                    c_start = vad_start
+                # Limit backfill to prevent dragging in huge silence
+                limit_start = max(vad_start, c_start - 0.5)
+                if c_start > limit_start:
+                    c_start = limit_start
             
             INTERNAL_DELAY = -0.35
             
