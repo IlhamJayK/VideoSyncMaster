@@ -33,6 +33,7 @@ backend/ffmpeg/
 
 # --- Models & Large Files (CRITICAL) ---
 models/
+!backend/indextts/utils/maskgct/models/
 backend/models/
 *.pth
 *.pt
@@ -92,6 +93,7 @@ tts_*.wav
 
 # --- Installer ---
 *.exe
+*.zip
 setup_script.iss
 # Keep the iss if it is a template, but usually we exclude generated ones. 
 # If setup_script.iss is source code, KEEP IT. If generated, IGNORE IT.
