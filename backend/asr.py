@@ -165,8 +165,8 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
             # --- Strict VAD Intersection ---
             # Ensure the subtitle never exceeds the VAD-detected speech boundaries.
             # This prevents "eating" the silence between VAD segments.
-            c_start = max(c_start, vad_start)
-            c_end = min(c_end, vad_end)
+            # c_start = max(c_start, vad_start)
+            # c_end = min(c_end, vad_end)
             # -------------------------------
             
             # Ensure valid timestamp
