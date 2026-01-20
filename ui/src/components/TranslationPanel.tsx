@@ -88,9 +88,9 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
             ref={listRef}
             onScroll={onScroll}
         >
-            <div style={{ position: 'sticky', top: 0, background: '#1f2937', zIndex: 10, padding: '10px', borderRadius: '8px', borderBottom: '1px solid #374151', minHeight: '110px', boxSizing: 'border-box' }}>
+            <div style={{ position: 'sticky', top: 0, background: 'var(--bg-secondary)', zIndex: 10, padding: '10px', borderRadius: '8px', borderBottom: '1px solid var(--border-color)', minHeight: '110px', boxSizing: 'border-box' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <h3 style={{ margin: 0 }}>3. 翻译字幕</h3>
+                    <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>3. 翻译字幕</h3>
                     <button
                         onClick={onTranslateAndDub}
                         disabled={segments.length === 0 || loading || dubbingLoading}
@@ -112,7 +112,7 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
                 <div style={{ display: 'flex', gap: '5px', marginBottom: '10px' }}>
                     <select
-                        style={{ flex: 1, padding: '8px', background: '#374151', color: 'white', border: '1px solid #4b5563', borderRadius: '4px' }}
+                        style={{ flex: 1, padding: '8px', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
                         value={targetLang}
                         onChange={(e) => setTargetLang(e.target.value)}
                     >
@@ -162,7 +162,7 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
                     const isRetranslating = retranslatingSegmentId === idx;
                     const isBusy = isGenerating || isRetranslating;
 
-                    let bgColor = 'rgba(255,255,255,0.05)';
+                    let bgColor = 'var(--item-bg-inactive)';
                     let borderColor = 'transparent';
 
                     if (isBusy) {
@@ -193,7 +193,7 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
                                 cursor: 'pointer'
                             }}
                         >
-                            <div style={{ minWidth: '120px', fontSize: '0.85em', color: isActive ? '#fff' : 'var(--accent-color)' }}>
+                            <div style={{ minWidth: '120px', fontSize: '0.85em', color: isActive ? 'var(--text-primary)' : 'var(--accent-color)' }}>
                                 {formatTimestamp(seg.start)} - {formatTimestamp(seg.end)}
                             </div>
 

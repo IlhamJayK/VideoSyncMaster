@@ -297,8 +297,8 @@ def translate_text(input_text_or_json, target_lang):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def dub_video(input_path, target_lang, output_path):
-    print(f"Starting AI Dubbing for {input_path} -> {target_lang}", flush=True)
+def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
+    print(f"Starting AI Dubbing for {input_path} -> {target_lang} using {asr_service}", flush=True)
     
     # 1. Initialize LLM
     translator = LLMTranslator()
@@ -306,7 +306,7 @@ def dub_video(input_path, target_lang, output_path):
     # 2. Run ASR
     # 2. Run ASR
     print("Step 1/4: Running ASR...", flush=True)
-    segments = run_asr(input_path) # List of {start, end, text}
+    segments = run_asr(input_path, service=asr_service) # List of {start, end, text}
     if not segments:
         return {"success": False, "error": "ASR failed or no speech detected."}
     
@@ -454,6 +454,7 @@ def main():
     parser.add_argument("--text", type=str, help="Text to speak (for generate_single_tts)")
     parser.add_argument("--start", type=float, help="Start time in seconds (for generate_single_tts)", default=0.0)
     parser.add_argument("--model_dir", type=str, help="Path to models directory (HF_HOME)")
+    parser.add_argument("--asr", type=str, help="ASR service to use: whisperx, jianying, bcut", default="whisperx")
     args = parser.parse_args()
 
     result_data = None
@@ -461,8 +462,8 @@ def main():
     if args.action == "test_asr":
         if args.input:
             if not args.json:
-                print(f"Testing ASR on {args.input}", flush=True)
-            segments = run_asr(args.input)
+                print(f"Testing ASR on {args.input} using {args.asr}", flush=True)
+            segments = run_asr(args.input, service=args.asr)
             if args.json:
                 result_data = segments
             else:
@@ -568,7 +569,7 @@ def main():
     elif args.action == "dub_video":
         if args.input and args.output:
             target = args.lang if args.lang else "English"
-            result_data = dub_video(args.input, target, args.output)
+            result_data = dub_video(args.input, target, args.output, asr_service=args.asr)
             if not args.json:
                 print(result_data)
         else:
@@ -796,7 +797,7 @@ def main():
     try:
         if args.action == 'asr':
             debug_log(f"Running ASR on: {args.input}")
-            result_data = run_asr(args.input, args.model)
+            result_data = run_asr(args.input, args.model, service=args.asr)
         elif args.action == 'translate_text':
              # ... (rest of logic handles exceptions internally, but good to catch top level)
              # Handled inside specific functions or below

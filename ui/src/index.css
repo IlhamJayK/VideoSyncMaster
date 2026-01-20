@@ -10,6 +10,12 @@
   --success: #10b981;
   --error: #ef4444;
 
+  /* Glass Defaults (Dark) */
+  --glass-bg: rgba(30, 41, 59, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --item-bg-inactive: rgba(255, 255, 255, 0.05);
+
   font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
@@ -33,13 +39,160 @@ body {
   transition: background 0.3s ease;
 }
 
-body.gradient-bg {
-  background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
-  background-attachment: fixed;
+body.light-mode {
+  background: linear-gradient(135deg, #e0f2fe 0%, #0096e7 100%) !important;
+  /* Solid Light Blue Gradient */
+  background-attachment: fixed !important;
+  color: #1e293b;
+
+  /* Light Key Overrides */
+  --bg-primary: #f1f5f9;
+  /* Slate-100 */
+  --bg-secondary: #ffffff;
+  --text-primary: #1e293b;
+  /* Slate-800 */
+  --text-secondary: #64748b;
+  /* Slate-500 */
+  --border-color: #cbd5e1;
+  /* Slate-300 */
+
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-border: rgba(0, 0, 0, 0.1);
+  --item-bg-inactive: rgba(0, 0, 0, 0.05);
+}
+
+/* Dynamic Sun Effect */
+body.light-mode::before {
+  content: '';
+  position: fixed;
+  top: -150px;
+  left: -150px;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(255, 215, 0, 0.5) 0%, rgba(255, 255, 255, 0) 70%);
+  filter: blur(30px);
+  z-index: 0;
+  /* Behind content (z-index 2) */
+  animation: sun-pulse 8s infinite alternate ease-in-out;
+  pointer-events: none;
+}
+
+@keyframes sun-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+
+  100% {
+    transform: scale(1.3);
+    opacity: 0.9;
+  }
 }
 
 body.dark-bg {
-  background-color: var(--bg-primary);
+  background-color: #050510 !important;
+  /* Deep Dark Blue-Black */
+  background-attachment: fixed !important;
+  color: var(--text-primary);
+  /* Static fallback removed, using pseudo-elements for dynamics */
+}
+
+/* Dynamic Dark Mode Glows */
+body.dark-bg::before {
+  content: '';
+  position: fixed;
+  top: 20%;
+  left: 10%;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.45) 0%, transparent 70%);
+  filter: blur(60px);
+  z-index: 0;
+  /* Changed from -1 to 0 to be visible above bg color */
+  animation: blob-blue-move 5s infinite alternate ease-in-out;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+body.dark-bg::after {
+  content: '';
+  position: fixed;
+  bottom: 20%;
+  right: 10%;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.35) 0%, transparent 70%);
+  filter: blur(60px);
+  z-index: 0;
+  /* Changed from -1 to 0 */
+  animation: blob-orange-move 6s infinite alternate ease-in-out;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+@keyframes blob-blue-move {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  33% {
+    transform: translate(100px, -50px) scale(1.2);
+  }
+
+  66% {
+    transform: translate(-50px, 100px) scale(0.8);
+  }
+
+  100% {
+    transform: translate(50px, 50px) scale(1.1);
+  }
+}
+
+@keyframes blob-orange-move {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  33% {
+    transform: translate(-80px, 60px) scale(1.3);
+  }
+
+  66% {
+    transform: translate(40px, -40px) scale(0.9);
+  }
+
+  100% {
+    transform: translate(-60px, -20px) scale(1.1);
+  }
+}
+
+/* Extra Faint Blobs */
+.blob-extra-blue {
+  position: fixed;
+  bottom: -10%;
+  left: 10%;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.25) 0%, transparent 70%);
+  filter: blur(50px);
+  z-index: 0;
+  animation: blob-blue-move 5s infinite alternate-reverse ease-in-out;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.blob-extra-orange {
+  position: fixed;
+  top: -10%;
+  right: 10%;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.2) 0%, transparent 70%);
+  filter: blur(50px);
+  z-index: 0;
+  animation: blob-orange-move 6s infinite alternate-reverse ease-in-out;
+  border-radius: 50%;
+  pointer-events: none;
 }
 
 #root {
@@ -52,12 +205,13 @@ body.dark-bg {
 
 /* Premium Utilities */
 .glass-panel {
-  background: rgba(30, 41, 59, 0.7);
+  background: var(--glass-bg);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--glass-border);
   border-radius: 12px;
   padding: 20px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--glass-shadow);
+  transition: background 0.3s, border-color 0.3s;
 }
 
 .btn {
@@ -90,7 +244,7 @@ body.dark-bg {
   border-radius: 6px;
   outline: none;
   width: 100%;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, background 0.3s, color 0.3s;
 }
 
 .input-field:focus {

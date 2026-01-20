@@ -160,16 +160,17 @@ const VideoUpload: React.FC<VideoUploadProps> = ({ onFileSelected, onTimeUpdate,
         <div
             style={{
                 padding: '20px',
-                border: isDragging ? '2px dashed #6366f1' : '1px solid #444',
+                border: isDragging ? '2px dashed #6366f1' : '1px solid var(--border-color)',
                 borderRadius: '8px',
-                backgroundColor: isDragging ? 'rgba(99, 102, 241, 0.1)' : '#1f2937',
-                position: 'relative'
+                backgroundColor: isDragging ? 'rgba(99, 102, 241, 0.1)' : 'var(--glass-bg)',
+                position: 'relative',
+                backdropFilter: 'blur(10px)'
             }}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
         >
-            <h3 style={{ marginTop: 0 }}>1. 选择视频</h3>
+            <h3 style={{ marginTop: 0, color: 'var(--text-primary)' }}>1. 选择视频</h3>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
                 <input
                     type="file"

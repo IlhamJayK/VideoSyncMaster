@@ -326,4 +326,32 @@ app.whenReady().then(() => {
     }
     return true; // No process running, technically success
   })
+  // IPC Handler to open backend log
+  ipcMain.handle('open-backend-log', async () => {
+    try {
+      let projectRoot;
+      if (app.isPackaged) {
+        projectRoot = path.dirname(process.resourcesPath);
+      } else {
+        projectRoot = path.resolve(process.env.APP_ROOT, '..');
+      }
+
+      const logPath = path.join(projectRoot, 'logs', 'backend_debug.log');
+
+      if (!fs.existsSync(logPath)) {
+        console.error(`Log file not found at: ${logPath}`);
+        return { success: false, error: 'Log file not found' };
+      }
+
+      const error = await shell.openPath(logPath);
+      if (error) {
+        console.error(`Failed to open log: ${error}`);
+        return { success: false, error };
+      }
+      return { success: true };
+    } catch (e) {
+      console.error("Failed to open backend log:", e);
+      return { success: false, error: String(e) };
+    }
+  })
 })

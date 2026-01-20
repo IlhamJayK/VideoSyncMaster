@@ -13,9 +13,13 @@ import gc
 import transformers.modeling_utils
 import transformers.utils.import_utils
 
-
 transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
 transformers.modeling_utils.check_torch_load_is_safe = lambda: None
+
+from jianying import JianYingASR
+from bcut import BcutASR
+from asr_data import ASRData
+
 
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -203,12 +207,73 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
 
 
 
-def run_asr(audio_path, model_path=None):
+
+def run_asr(audio_path, model_path=None, service="whisperx"):
     """
-    Run ASR using WhisperX:
-    1. Transcribe (Faster-Whisper generic)
-    2. Align (WhipserX Phoneme Alignment)
+    Run ASR using WhisperX or Cloud APIs:
+    1. Transcribe (Faster-Whisper generic / Cloud)
+    2. Align (WhipserX Phoneme Alignment - Only for WhisperX)
     """
+    
+    # If input is video, extract audio first
+    ext = os.path.splitext(audio_path)[1].lower()
+    if ext in ['.mp4', '.mkv', '.avi', '.mov', '.flv']:
+        import hashlib
+        
+        # Create cache directory
+        cache_dir = os.path.join(BACKEND_DIR, ".cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Generare unique filename based on absolute path
+        abs_path = os.path.abspath(audio_path)
+        file_hash = hashlib.md5(abs_path.encode('utf-8')).hexdigest()
+        cached_audio = os.path.join(cache_dir, f"{file_hash}.mp3")
+        
+        if os.path.exists(cached_audio):
+             print(f"Using cached audio: {cached_audio}")
+             audio_path = cached_audio
+        else:
+            print(f"Extracting audio to {cached_audio}...")
+            try:
+                from pydub import AudioSegment
+                AudioSegment.from_file(audio_path).export(cached_audio, format="mp3")
+                audio_path = cached_audio
+            except Exception as e:
+                print(f"Audio extraction failed: {e}")
+                # Fallback to original path if extraction fails (though likely will fail later)
+                pass
+
+    if service == "jianying":
+        print(f"Running JianYing ASR on {audio_path}")
+        asr = JianYingASR(audio_path, need_word_time_stamp=False)
+        asr_data = asr.run()
+        # Convert ASRData to standard format
+        segments = []
+        for seg in asr_data.segments:
+            segments.append({
+                "start": seg.start_time / 1000.0,
+                "end": seg.end_time / 1000.0,
+                "text": seg.text
+            })
+        print(f"JianYing ASR complete. {len(segments)} segments.")
+        return segments
+
+    elif service == "bcut":
+        print(f"Running Bcut ASR on {audio_path}")
+        asr = BcutASR(audio_path, need_word_time_stamp=False)
+        asr_data = asr.run()
+        # Convert ASRData to standard format
+        segments = []
+        for seg in asr_data.segments:
+            segments.append({
+                "start": seg.start_time / 1000.0,
+                "end": seg.end_time / 1000.0,
+                "text": seg.text
+            })
+        print(f"Bcut ASR complete. {len(segments)} segments.")
+        return segments
+    
+    # Default: WhisperX
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
@@ -236,8 +301,6 @@ def run_asr(audio_path, model_path=None):
         if not os.path.exists(dirname):
             return in_path # Can't do anything if dir doesn't exist
             
-        # Extract timestamp prefix (assuming format: invalid_chars...mp4, but usually starts with digits)
-        # The user example: 1768146582461_...
         import re
         match = re.match(r"(\d+)_", basename)
         if match:

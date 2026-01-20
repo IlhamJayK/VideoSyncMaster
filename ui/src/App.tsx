@@ -5,6 +5,8 @@ import VideoUpload from './components/VideoUpload'
 import Timeline, { Segment } from './components/Timeline'
 import TranslationPanel from './components/TranslationPanel'
 import CloudBackground from './components/CloudBackground'
+import Sidebar from './components/Sidebar'
+
 
 function App() {
   const [videoPath, setVideoPath] = useState<string>('')
@@ -36,6 +38,62 @@ function App() {
   const [leftWidth, setLeftWidth] = useState(400);
   const [timelineWidth, setTimelineWidth] = useState(500);
   const [dragTarget, setDragTarget] = useState<'left' | 'middle' | null>(null);
+  const [asrService, setAsrService] = useState('whisperx');
+
+  // Layout validation to prevent "dead zone" on small screens
+  useEffect(() => {
+    const validateLayout = () => {
+      const sidebarWidth = 80;
+      const minTranslationWidth = 350;
+      const minLeftWidth = 250;
+      const minTimelineWidth = 300;
+      const margins = 40;
+
+      const totalAvailable = window.innerWidth - sidebarWidth - margins;
+      const currentTotal = leftWidth + timelineWidth + minTranslationWidth;
+
+      if (currentTotal > totalAvailable) {
+        // We need to shrink. Prioritize shrinking timeline, then left.
+        // But respect minimums.
+
+        let availableForTwoColumns = totalAvailable - minTranslationWidth;
+        // Clamp to theoretical maximums
+        if (availableForTwoColumns < minLeftWidth + minTimelineWidth) {
+          // Screen implies extremely small width, just set to minimums (layout will break but logic won't hang)
+          availableForTwoColumns = minLeftWidth + minTimelineWidth;
+        }
+
+        // Try to keep ratio or just shrink timeline first?
+        // Let's protect leftWidth (video) a bit more.
+        let newLeft = leftWidth;
+        let newTimeline = timelineWidth;
+
+        // Shrink timeline down to min
+        if (newLeft + newTimeline > availableForTwoColumns) {
+          const overflow = (newLeft + newTimeline) - availableForTwoColumns;
+          const timelineShrinkable = newTimeline - minTimelineWidth;
+
+          if (timelineShrinkable >= overflow) {
+            newTimeline -= overflow;
+          } else {
+            newTimeline = minTimelineWidth;
+            const remainingOverflow = overflow - timelineShrinkable;
+            newLeft = Math.max(minLeftWidth, newLeft - remainingOverflow);
+          }
+        }
+
+        if (newLeft !== leftWidth) setLeftWidth(newLeft);
+        if (newTimeline !== timelineWidth) setTimelineWidth(newTimeline);
+      }
+    };
+
+    // Run on mount and resize
+    validateLayout();
+    window.addEventListener('resize', validateLayout);
+    return () => window.removeEventListener('resize', validateLayout);
+  }, [leftWidth, timelineWidth]); // Re-run if they change externally (though we want to avoid loop, this logic only shrinks if OVER limit)
+
+
 
   // Background Mode
   const [bgMode, setBgMode] = useState<'gradient' | 'dark'>(() => (localStorage.getItem('bgMode') as 'gradient' | 'dark') || 'gradient');
@@ -43,12 +101,20 @@ function App() {
 
   /* 
    * Transition Logic:
-   * We use a fixed overlay for the gradient. 
-   * We must Clear any legacy classNames (gradient-bg/dark-bg) from body so the solid background color works.
+   * "gradient" mode is now repurposed as "Light Mode"
+   * "dark" mode remains default
    */
   useEffect(() => {
-    document.body.className = ''; // Remove 'gradient-bg' if present
-    document.body.style.backgroundColor = 'var(--bg-primary, #0f172a)'; // Ensure dark base
+    if (bgMode === 'gradient') { // 'gradient' maps to Light Mode now
+      document.body.classList.add('light-mode');
+      document.body.classList.remove('dark-bg');
+    } else {
+      document.body.classList.remove('light-mode');
+      document.body.classList.add('dark-bg');
+    }
+
+    // Reset specific style property to allow class to take over or ensure fallback
+    document.body.style.backgroundColor = '';
     localStorage.setItem('bgMode', bgMode);
   }, [bgMode]);
 
@@ -111,45 +177,64 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (dragTarget === 'left') {
-        const paddingOffset = 20;
-        const overheads = 680; // 300(mid) + 300(right) + ~80(pads/resizers)
-        const maxLeft = window.innerWidth - overheads;
-        const newWidth = Math.max(250, Math.min(maxLeft, e.clientX - paddingOffset));
-        setLeftWidth(newWidth);
-      } else if (dragTarget === 'middle') {
-        // Middle column starts after: 20(pad) + leftWidth + 10(resizer) = leftWidth + 30
-        const startOffset = leftWidth + 30;
-        const overheads = 380; // 300(right) + ~80(pads/resizers)
-        const maxTimeline = window.innerWidth - leftWidth - overheads;
-        const newWidth = Math.max(300, Math.min(maxTimeline, e.clientX - startOffset));
-        setTimelineWidth(newWidth);
-      }
-    };
+  // Drag state refs to avoid closure staleness and re-renders
+  const dragState = useRef<{
+    startX: number;
+    startLeftWidth: number;
+    startTimelineWidth: number;
+    target: 'left' | 'middle' | null;
+  }>({ startX: 0, startLeftWidth: 0, startTimelineWidth: 0, target: null });
 
-    const handleMouseUp = () => {
-      setDragTarget(null);
-    };
+  // Drag handlers using Refs to avoid closure staleness
+  const handleDragMove = useRef((e: MouseEvent) => {
+    if (!dragState.current.target) return;
 
-    if (dragTarget) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-    } else {
-      document.body.style.cursor = 'default';
-      document.body.style.userSelect = 'auto';
+    const { startX, startLeftWidth, startTimelineWidth, target } = dragState.current;
+    const deltaX = e.clientX - startX;
+
+    const minTranslationWidth = 350;
+    const minTimelineWidth = 300;
+    const minLeftWidth = 250;
+
+    const sidebarWidth = 80; // Buffer safe assumption
+    const availableContentWidth = window.innerWidth - sidebarWidth;
+
+    if (target === 'left') {
+      const maxLeft = availableContentWidth - timelineWidth - minTranslationWidth - 40;
+      const newW = Math.max(minLeftWidth, Math.min(maxLeft, startLeftWidth + deltaX));
+      setLeftWidth(newW);
+    } else if (target === 'middle') {
+      const maxTimeline = availableContentWidth - leftWidth - minTranslationWidth - 40;
+      const newW = Math.max(minTimelineWidth, Math.min(maxTimeline, startTimelineWidth + deltaX));
+      setTimelineWidth(newW);
     }
+  }).current;
 
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'default';
-      document.body.style.userSelect = 'auto';
+  const handleDragUp = useRef(() => {
+    setDragTarget(null);
+    dragState.current.target = null;
+    document.body.style.cursor = 'default';
+    document.body.style.userSelect = 'auto';
+    window.removeEventListener('mousemove', handleDragMove);
+    window.removeEventListener('mouseup', handleDragUp);
+  }).current;
+
+  const startDrag = (e: React.MouseEvent, target: 'left' | 'middle') => {
+    e.preventDefault();
+    setDragTarget(target);
+    dragState.current = {
+      startX: e.clientX,
+      startLeftWidth: leftWidth,
+      startTimelineWidth: timelineWidth,
+      target: target
     };
-  }, [dragTarget, leftWidth]);
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragUp);
+  };
+
 
   // Sync Scroll Handler
   const handleScroll = (source: 'timeline' | 'translation') => {
@@ -197,7 +282,8 @@ function App() {
     try {
       const result = await (window as any).ipcRenderer.invoke('run-backend', [
         '--action', 'test_asr',
-        '--input', originalVideoPath
+        '--input', originalVideoPath,
+        '--asr', asrService
       ]);
 
       if (abortRef.current) return null;
@@ -658,8 +744,72 @@ function App() {
   };
 
 
+  const handleSRTUpload = (file: File) => {
+    if (!originalVideoPath) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (text) {
+        // Normalize line endings to \n
+        const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+        // Parse SRT:
+        // 1. Index (digits)
+        // 2. Timestamp --> Timestamp (flexible spacing)
+        // 3. Content (multi-line, non-greedy utf8 safe)
+        // 4. Lookahead for next index or EOF
+        const regex = /(\d+)\s*\n\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*\n([\s\S]*?)(?=\n\d+\s*\n\s*\d{2}:\d{2}[:.]|$)/g;
+
+        const newSegments: Segment[] = [];
+        let match;
+        const parseTime = (t: string) => {
+          // Improve time parsing for both comma and dot decimals
+          const cleanT = t.replace(',', '.');
+          const [h, m, s] = cleanT.split(':');
+          return parseFloat(h) * 3600 + parseFloat(m) * 60 + parseFloat(s);
+        };
+
+        while ((match = regex.exec(normalizedText)) !== null) {
+          const content = match[4].trim();
+          // Filter out empty lines if any remain
+          if (content) {
+            newSegments.push({
+              start: parseTime(match[2]),
+              end: parseTime(match[3]),
+              text: content
+            });
+          }
+        }
+
+        if (newSegments.length > 0) {
+          setSegments(newSegments);
+          setStatus(`已加载外部字幕 (${newSegments.length} 条)`);
+        } else {
+          console.warn("SRT Regex matched nothing. Text sample:", normalizedText.slice(0, 200));
+          // Fallback simple line-based parser if regex fails excessively?
+          // For now, allow empty status if truly failed, but log it.
+          setStatus(`字幕解析失败：未找到有效字幕片段`);
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleOpenLog = async () => {
+    try {
+      const result = await (window as any).ipcRenderer.invoke('open-backend-log');
+      if (!result.success) {
+        console.error("Failed to open log:", result.error);
+        setStatus(`无法打开日志: ${result.error || '未知错误'}`);
+      }
+    } catch (e) {
+      console.error("Failed to open log:", e);
+      setStatus("无法打开日志文件");
+    }
+  };
+
   return (
-    <div className="container" style={{ display: 'flex', flexDirection: 'column', height: '100vh', padding: '20px', boxSizing: 'border-box', color: 'white' }}>
+    <div className="container" style={{ display: 'flex', flexDirection: 'row', height: '100vh', padding: '20px', boxSizing: 'border-box', color: 'white' }}>
       <theme-button
         key="theme-btn-3"
         ref={themeBtnRef}
@@ -677,20 +827,16 @@ function App() {
       ></theme-button>
 
       {/* Smooth Background Transition Layer (z-index 0) */}
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-        zIndex: 0,
-        background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
-        opacity: bgMode === 'gradient' ? 1 : 0,
-        transition: 'opacity 0.5s ease-in-out',
-        pointerEvents: 'none'
-      }} />
+
 
       <CloudBackground mode={bgMode} />
+
+      {bgMode === 'dark' && (
+        <>
+          <div className="blob-extra-blue" />
+          <div className="blob-extra-orange" />
+        </>
+      )}
 
       <style>{`
         @keyframes indeterminate-progress {
@@ -700,11 +846,39 @@ function App() {
       `}</style>
 
       {/* Main Content Wrapper (z-index 2) */}
-      <div className="content-wrapper" style={{ position: 'relative', zIndex: 2, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <h1 style={{ textAlign: 'center' }}>VideoSync</h1>
-        <p style={{ textAlign: 'center', color: '#ffffff', opacity: 0.9 }}>自动配音与音色克隆系统</p>
+      <Sidebar
+        activeService={asrService}
+        onServiceChange={setAsrService}
+        disabled={loading || dubbingLoading || generatingSegmentId !== null}
+        onOpenLog={handleOpenLog}
+        themeMode={bgMode}
+      />
+      <div className="content-wrapper" style={{ position: 'relative', zIndex: 2, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
+        <h1 style={{
+          textAlign: 'center',
+          marginBottom: '5px',
+          background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          fontSize: '2.5rem',
+          fontWeight: '800',
+          letterSpacing: '-1px',
+          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))'
+        }}>VideoSync</h1>
+        <p style={{
+          textAlign: 'center',
+          marginTop: '5px',
+          background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          fontSize: '1em',
+          fontWeight: 700,
+          opacity: 1,
+          letterSpacing: '1px'
+        }}>自动配音与音色克隆系统</p>
 
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '15px' }}>
+        {/* Repositioned Button: Absolute Top Left */}
+        <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10 }}>
           <button
             onClick={handleOneClickRun}
             disabled={loading || dubbingLoading || generatingSegmentId !== null || !originalVideoPath}
@@ -838,12 +1012,12 @@ function App() {
             />
 
             {/* Merged Video Display Section */}
-            <div style={{ padding: '15px', background: '#1f2937', borderRadius: '8px', border: '1px solid #374151' }}>
-              <h3 style={{ marginTop: 0, marginBottom: '10px' }}>4. 合并后的视频</h3>
+            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+              <h3 style={{ marginTop: 0, marginBottom: '10px', color: 'var(--text-primary)' }}>4. 合并后的视频</h3>
 
               {/* Merged Video Player */}
               {mergedVideoPath && (
-                <div style={{ marginBottom: '15px', position: 'relative', background: '#000', borderRadius: '4px', overflow: 'hidden' }}>
+                <div style={{ marginBottom: '15px', position: 'relative', background: 'black', borderRadius: '4px', overflow: 'hidden' }}>
                   <video
                     src={mergedVideoPath.startsWith('file:') ? mergedVideoPath : `file:///${encodeURI(mergedVideoPath.replace(/\\/g, '/'))}`}
                     controls
@@ -870,9 +1044,9 @@ function App() {
                 <div style={{
                   padding: '40px 20px',
                   textAlign: 'center',
-                  color: '#6b7280',
+                  color: 'var(--text-secondary)',
                   fontSize: '0.9em',
-                  border: '2px dashed #374151',
+                  border: '2px dashed var(--border-color)',
                   borderRadius: '4px',
                   marginBottom: '15px'
                 }}>
@@ -915,9 +1089,10 @@ function App() {
 
           {/* Resizer Divider */}
           <div
-            onMouseDown={(e) => { setDragTarget('left'); e.preventDefault(); }}
+            onMouseDown={(e) => startDrag(e, 'left')}
             style={{
               width: '6px',
+              flexShrink: 0,
               cursor: 'col-resize',
               backgroundColor: dragTarget === 'left' ? '#6366f1' : 'rgba(255,255,255,0.1)',
               margin: '0 2px',
@@ -959,14 +1134,16 @@ function App() {
               activeIndex={activeIndex}
               onEditStart={setEditingIndex}
               onEditEnd={() => setEditingIndex(null)}
+              onUploadSubtitle={handleSRTUpload}
             />
           </div>
 
           {/* Resizer Divider Middle */}
           <div
-            onMouseDown={(e) => { setDragTarget('middle'); e.preventDefault(); }}
+            onMouseDown={(e) => startDrag(e, 'middle')}
             style={{
               width: '6px',
+              flexShrink: 0,
               cursor: 'col-resize',
               backgroundColor: dragTarget === 'middle' ? '#6366f1' : 'rgba(255,255,255,0.1)',
               margin: '0 2px',
