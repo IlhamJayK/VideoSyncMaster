@@ -64,10 +64,45 @@ echo                                                                            
 echo                                                                              ^"Y88888P'  
 echo 天冬AI制作：https://space.bilibili.com/32275117
 echo ==========================================
-echo                                                                                                                                        
-echo ==========================================
 
 set PATH=%~dp0python;%~dp0python\Scripts;%PATH%
+
+rem --- 自动检测/下载 Node.js 环境 ---
+echo [INFO] 检查 Node.js 环境...
+node --version >nul 2>&1
+if not errorlevel 1 goto :NODE_READY
+
+if exist "%~dp0node_env\node-v18.19.0-win-x64\node.exe" goto :SET_NODE_PATH
+
+echo [WARNING] 未检测到 Node.js，准备下载免安装版 (v18.19.0)...
+if not exist "%~dp0node_env" mkdir "%~dp0node_env"
+
+if not exist "%~dp0node_env\node.zip" (
+    echo [INFO] 正在从 npmmirror 下载...
+    echo 下载地址: https://registry.npmmirror.com/-/binary/node/v18.19.0/node-v18.19.0-win-x64.zip
+    powershell -Command "Invoke-WebRequest -Uri 'https://registry.npmmirror.com/-/binary/node/v18.19.0/node-v18.19.0-win-x64.zip' -OutFile '%~dp0node_env\node.zip'"
+)
+
+echo [INFO] 正在解压 Node.js...
+tar -xf "%~dp0node_env\node.zip" -C "%~dp0node_env"
+if errorlevel 1 (
+    powershell -Command "Expand-Archive -Path '%~dp0node_env\node.zip' -DestinationPath '%~dp0node_env' -Force"
+)
+
+:SET_NODE_PATH
+echo [INFO] 配置 Node.js 环境变量...
+set PATH=%~dp0node_env\node-v18.19.0-win-x64;%PATH%
+node --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Node.js配置失败，请手动安装。
+    pause
+    exit /b
+)
+call npm config set registry https://registry.npmmirror.com
+
+:NODE_READY
+echo [INFO] Node.js 就绪: 
+node --version
 
 
 

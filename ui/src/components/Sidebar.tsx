@@ -5,10 +5,12 @@ interface SidebarProps {
     onServiceChange: (service: string) => void;
     disabled?: boolean;
     onOpenLog?: () => void;
+    onRepairEnv?: () => void;
+    hasMissingDeps?: boolean;
     themeMode?: 'light' | 'dark' | 'gradient'; // 'gradient' is actually our light mode now
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disabled, onOpenLog, themeMode }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disabled, onOpenLog, onRepairEnv, hasMissingDeps, themeMode }) => {
     const [isHovered, setIsHovered] = useState(false);
     const isLightMode = themeMode === 'gradient'; // 'gradient' is the new Light Mode key
 
@@ -128,13 +130,73 @@ const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disab
                 ))}
             </div>
 
-            {/* Bottom Section: Open Log */}
+            {/* Bottom Section: Utilities */}
             <div style={{
                 marginTop: 'auto',
                 borderTop: isLightMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.1)',
                 paddingTop: '10px',
-                width: '100%'
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '5px'
             }}>
+                <button
+                    onClick={onRepairEnv}
+                    title={!isHovered ? "修复运行环境" : ""}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        paddingLeft: '24px',
+                        paddingRight: '12px',
+                        paddingTop: '12px',
+                        paddingBottom: '12px',
+                        border: 'none',
+                        borderLeft: '4px solid transparent',
+                        background: 'transparent',
+                        color: isLightMode ? '#64748b' : '#94a3b8',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.2s ease',
+                        outline: 'none',
+                        fontSize: '0.95em',
+                        width: '100%',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        position: 'relative'
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.color = isLightMode ? '#1e293b' : '#fff';
+                        e.currentTarget.style.background = isLightMode ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.color = isLightMode ? '#64748b' : '#94a3b8';
+                        e.currentTarget.style.background = 'transparent';
+                    }}
+                >
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                        <span style={{ fontSize: '1.5em', marginRight: '15px', flexShrink: 0 }}>🔧</span>
+                        {hasMissingDeps && (
+                            <span style={{
+                                position: 'absolute',
+                                top: '-2px',
+                                right: '12px',
+                                width: '8px',
+                                height: '8px',
+                                borderRadius: '50%',
+                                backgroundColor: '#ef4444',
+                                border: `2px solid ${isLightMode ? '#ffffff' : '#1e293b'}`
+                            }} />
+                        )}
+                    </div>
+                    <span style={{
+                        opacity: isHovered ? 1 : 0,
+                        transition: 'opacity 0.2s',
+                        transitionDelay: isHovered ? '0.1s' : '0s'
+                    }}>
+                        修复运行环境
+                    </span>
+                </button>
+
                 <button
                     onClick={onOpenLog}
                     title={!isHovered ? "查看运行日志" : ""}

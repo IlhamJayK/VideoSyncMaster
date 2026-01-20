@@ -52,18 +52,19 @@
     },
     "extraResources": [
       {
-        "from": "../dist_backend/backend",
+        "from": "../backend",
         "to": "backend",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyd",
+          "!**/*.so"
         ]
       },
       {
-        "from": "../dist_backend/python",
-        "to": "python",
-        "filter": [
-          "**/*"
-        ]
+        "from": "../requirements.txt",
+        "to": "backend/requirements.txt"
       }
     ]
   }

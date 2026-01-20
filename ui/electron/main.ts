@@ -110,21 +110,38 @@ app.whenReady().then(() => {
       let backendProcess;
 
       if (app.isPackaged) {
-        // In production: resources/python/python.exe running resources/backend/main.py
+        // In production: resources/python/python.exe OR ../python/python.exe (external)
+        // process.resourcesPath is inside the app installation directory
 
-        // Path to portable python exe (Moved to root level in resources)
-        const pythonExe = path.join(process.resourcesPath, 'python', 'python.exe');
-        // Path to main script (obfuscated)
+        // Check internal (bundled) python first
+        let pythonExe = path.join(process.resourcesPath, 'python', 'python.exe');
+        let modelsDir = path.join(path.dirname(process.resourcesPath), 'models', 'index-tts', 'hub');
+
+        if (!fs.existsSync(pythonExe)) {
+          // Fallback to external python (folder next to VideoSync.exe)
+          const appRoot = path.dirname(process.resourcesPath); // The folder containing .exe
+          pythonExe = path.join(appRoot, 'python', 'python.exe');
+          console.log('Internal Python not found, trying external:', pythonExe);
+        }
+
+        // Script path remains inside app.asar/backend or unpacked resources
         const scriptPath = path.join(process.resourcesPath, 'backend', 'main.py');
 
-        // Models Directory: AppRoot/models/index-tts/hub
-        // process.resourcesPath is AppRoot/resources
-        const appRoot = path.dirname(process.resourcesPath);
-        const modelsDir = path.join(appRoot, 'models', 'index-tts', 'hub');
+        // Check if models exist in default location, if not, check external
+        if (!fs.existsSync(modelsDir)) {
+          const appRoot = path.dirname(process.resourcesPath);
+          // Maybe models are in 'models' folder next to exe
+          modelsDir = path.join(appRoot, 'models', 'index-tts', 'hub');
+        }
 
-        console.log('Spawning Packaged Backend with Portable Python:', pythonExe);
+        console.log('Spawning Packaged Backend with Python:', pythonExe);
         console.log('Target Script:', scriptPath);
         console.log('Models Dir:', modelsDir);
+
+        if (!fs.existsSync(pythonExe)) {
+          reject(new Error(`Python environment not found. Please ensure 'python' folder exists in ${path.dirname(pythonExe)}`));
+          return;
+        }
 
         // Spawn python process
         backendProcess = spawn(pythonExe, [scriptPath, '--json', '--model_dir', modelsDir, ...args], {
@@ -353,5 +370,179 @@ app.whenReady().then(() => {
       console.error("Failed to open backend log:", e);
       return { success: false, error: String(e) };
     }
+  })
+
+  // IPC Handler to repair python environment
+  ipcMain.handle('fix-python-env', async (_event) => {
+    return new Promise((resolve) => {
+      try {
+        let pythonExe = '';
+        let requirementsPath = '';
+        let projectRoot = '';
+
+        if (app.isPackaged) {
+          projectRoot = path.dirname(process.resourcesPath);
+          // 1. Try internal python
+          pythonExe = path.join(process.resourcesPath, 'python', 'python.exe');
+          if (!fs.existsSync(pythonExe)) {
+            // 2. Try external python
+            pythonExe = path.join(projectRoot, 'python', 'python.exe');
+          }
+
+          // Requirements: Try looking in project root
+          requirementsPath = path.join(projectRoot, 'requirements.txt');
+          if (!fs.existsSync(requirementsPath)) {
+            // Try looking inside backend resource if bundled?
+            const internalReq = path.join(process.resourcesPath, 'backend', 'requirements.txt');
+            if (fs.existsSync(internalReq)) requirementsPath = internalReq;
+          }
+
+        } else {
+          projectRoot = path.resolve(process.env.APP_ROOT, '..');
+          // In dev: assuming python is in PATH or venv
+          // But let's try to find the local one first
+          if (fs.existsSync(path.join(projectRoot, 'python', 'python.exe'))) {
+            pythonExe = path.join(projectRoot, 'python', 'python.exe');
+          } else {
+            pythonExe = 'python'; // Fallback to system env
+          }
+          requirementsPath = path.join(projectRoot, 'requirements.txt');
+        }
+
+        if (!fs.existsSync(pythonExe) && pythonExe !== 'python') {
+          resolve({ success: false, error: `找不到 Python 解释器。请确认 python 文件夹存在于 ${projectRoot}` });
+          return;
+        }
+
+        if (!fs.existsSync(requirementsPath)) {
+          resolve({ success: false, error: `找不到 requirements.txt。请确认文件存在于 ${projectRoot}` });
+          return;
+        }
+
+        console.log(`[FixEnv] Starting repair... Python: ${pythonExe}, Req: ${requirementsPath}`);
+
+        const installProcess = spawn(pythonExe, ['-m', 'pip', 'install', '-r', requirementsPath], {
+          env: { ...process.env, PYTHONUTF8: '1' }
+        });
+
+        let output = '';
+        let errorOut = '';
+
+        installProcess.stdout.on('data', (data) => {
+          console.log(`[Pip]: ${data}`);
+          output += data.toString();
+        });
+
+        installProcess.stderr.on('data', (data) => {
+          console.error(`[Pip Err]: ${data}`);
+          errorOut += data.toString();
+        });
+
+        installProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log('[FixEnv] Success!');
+            resolve({ success: true, output });
+          } else {
+            console.error('[FixEnv] Failed code:', code);
+            resolve({ success: false, error: `Pip install failed (Code ${code}). \nError: ${errorOut}` });
+          }
+        });
+
+        installProcess.on('error', (err) => {
+          resolve({ success: false, error: `Spawn error: ${err.message}` });
+        });
+
+      } catch (e: any) {
+        resolve({ success: false, error: e.message });
+      }
+    });
+  })
+
+  // IPC Handler to check python environment (list missing deps)
+  ipcMain.handle('check-python-env', async (_event) => {
+    return new Promise((resolve) => {
+      try {
+        let pythonExe = '';
+        let requirementsPath = '';
+        let checkScriptPath = '';
+        let projectRoot = '';
+
+        if (app.isPackaged) {
+          projectRoot = path.dirname(process.resourcesPath);
+          pythonExe = path.join(process.resourcesPath, 'python', 'python.exe');
+          if (!fs.existsSync(pythonExe)) {
+            pythonExe = path.join(projectRoot, 'python', 'python.exe');
+          }
+
+          requirementsPath = path.join(projectRoot, 'requirements.txt');
+          if (!fs.existsSync(requirementsPath)) {
+            const internalReq = path.join(process.resourcesPath, 'backend', 'requirements.txt');
+            if (fs.existsSync(internalReq)) requirementsPath = internalReq;
+          }
+
+          checkScriptPath = path.join(process.resourcesPath, 'backend', 'check_requirements.py');
+
+        } else {
+          projectRoot = path.resolve(process.env.APP_ROOT, '..');
+          if (fs.existsSync(path.join(projectRoot, 'python', 'python.exe'))) {
+            pythonExe = path.join(projectRoot, 'python', 'python.exe');
+          } else {
+            pythonExe = 'python';
+          }
+          requirementsPath = path.join(projectRoot, 'requirements.txt');
+          checkScriptPath = path.join(projectRoot, 'backend', 'check_requirements.py');
+        }
+
+        if (!fs.existsSync(pythonExe) && pythonExe !== 'python') {
+          resolve({ success: false, error: "Python interpreter not found" });
+          return;
+        }
+        if (!fs.existsSync(requirementsPath)) {
+          resolve({ success: false, error: "requirements.txt not found" });
+          return;
+        }
+        if (!fs.existsSync(checkScriptPath)) {
+          resolve({ success: false, error: "check_requirements.py not found" });
+          return;
+        }
+
+        const checkProcess = spawn(pythonExe, [checkScriptPath, requirementsPath, '--json'], {
+          env: { ...process.env, PYTHONUTF8: '1' }
+        });
+
+        let output = '';
+        checkProcess.stdout.on('data', (data) => output += data.toString());
+        checkProcess.stderr.on('data', (data) => console.error('[CheckEnv Err]:', data.toString()));
+
+        checkProcess.on('close', (code) => {
+          try {
+            // Attempt to find JSON in output
+            const jsonStart = output.indexOf('{');
+            const jsonEnd = output.lastIndexOf('}');
+            if (jsonStart !== -1 && jsonEnd !== -1) {
+              const jsonStr = output.substring(jsonStart, jsonEnd + 1);
+              const result = JSON.parse(jsonStr);
+              resolve({ success: true, missing: result.missing || [] });
+            } else {
+              // No JSON found
+              if (code === 0 && !output.trim()) resolve({ success: true, missing: [] }); // Empty output usually OK if logic implies success, but our script prints success msg.
+              // Actually our script prints "All good" if no JSON.
+              // Ideally we look for success status or non-zero code.
+              if (code !== 0) resolve({ success: false, error: "Dependency check failed (non-zero exit)" });
+              else resolve({ success: true, missing: [] });
+            }
+          } catch (e: any) {
+            resolve({ success: false, error: `Parse error: ${e.message}` });
+          }
+        });
+
+        checkProcess.on('error', (err) => {
+          resolve({ success: false, error: err.message });
+        });
+
+      } catch (e: any) {
+        resolve({ success: false, error: e.message });
+      }
+    });
   })
 })

@@ -319,12 +319,29 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
     resolved_path = resolve_file_path(audio_path)
     if resolved_path != audio_path:
         audio_path = resolved_path
+        
     if local_model_path:
         print(f"Found local model at: {local_model_path}")
         target_model = local_model_path
     else:
-        print(f"Local model not found. Will try downloading {DEFAULT_MODEL_ID}...")
-        local_model_path = PATH_1 
+        # CRITICAL CHANGE: If local model not found, and we are in "lazy check" mode,
+        # we must fail here if the model is truly missing, rather than trying to download (if offline).
+        # Check if we should enforce local models.
+        print(f"Local model not found. Defaulting to {DEFAULT_MODEL_ID} but checking existence...")
+        # If we are here, it means no local model was found in standard paths.
+        # If the user intends to rely on local models (standard usage), this should fail.
+        
+        # Check if the fallback path exists
+        if not os.path.exists(PATH_DEV_1) and not os.path.exists(PATH_PROD_1):
+             error_msg = (
+                 "Fatal Error: Local WhisperX model not found.\n"
+                 "Please ensure the 'models' folder is placed in the application root.\n"
+                 "API services (Jianying/Bcut) are available without local models."
+             )
+             print(error_msg)
+             raise FileNotFoundError(error_msg)
+        
+        target_model = PATH_DEV_1 if os.path.exists(PATH_DEV_1) else PATH_PROD_1 
     
     # 1. Transcribe
     print(f"Loading WhisperX model: {target_model} on {device} ({compute_type})...")

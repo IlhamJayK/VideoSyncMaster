@@ -39,8 +39,26 @@ function App() {
   const [timelineWidth, setTimelineWidth] = useState(500);
   const [dragTarget, setDragTarget] = useState<'left' | 'middle' | null>(null);
   const [asrService, setAsrService] = useState('whisperx');
+  const [missingDeps, setMissingDeps] = useState<string[]>([]);
 
-  // Layout validation to prevent "dead zone" on small screens
+  // Check Python environment on mount
+  useEffect(() => {
+    const checkEnv = async () => {
+      try {
+        const result = await (window as any).ipcRenderer.invoke('check-python-env');
+        if (result && result.success && result.missing) {
+          setMissingDeps(result.missing);
+          if (result.missing.length > 0) {
+            console.log("Missing dependencies:", result.missing);
+            setStatus(`检测到 ${result.missing.length} 个缺失的 Python 依赖`);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to check env:", e);
+      }
+    };
+    checkEnv();
+  }, []);
   useEffect(() => {
     const validateLayout = () => {
       const sidebarWidth = 80;
@@ -799,14 +817,50 @@ function App() {
     try {
       const result = await (window as any).ipcRenderer.invoke('open-backend-log');
       if (!result.success) {
-        console.error("Failed to open log:", result.error);
-        setStatus(`无法打开日志: ${result.error || '未知错误'}`);
+        setStatus(`无法打开日志: ${result.error}`);
       }
-    } catch (e) {
-      console.error("Failed to open log:", e);
-      setStatus("无法打开日志文件");
+    } catch (e: any) {
+      console.error(e);
+      setStatus(`打开日志失败: ${e.message}`);
     }
   };
+
+  const handleRepairEnv = async () => {
+    if (loading) return; // Prevent if already busy
+
+    let message = "这将尝试自动安装/修复 Python 依赖。过程可能需要几分钟，且需联网。\n是否继续？";
+    if (missingDeps.length > 0) {
+      message = `检测到以下缺失的依赖项:\n\n${missingDeps.join(', ')}\n\n点击“确定”将尝试自动安装这些依赖。\n过程可能需要几分钟，且需联网。是否继续？`;
+    }
+
+    const confirm = window.confirm(message);
+    if (!confirm) return;
+
+    setLoading(true);
+    setIsIndeterminate(true);
+    setStatus("正在修复环境 (pip install)... 请耐心等待");
+
+    try {
+      const result = await (window as any).ipcRenderer.invoke('fix-python-env');
+      if (result && result.success) {
+        setStatus("环境修复完成！请重启软件以生效。");
+        alert("修复完成！建议重启软件。");
+        setMissingDeps([]); // Clear flag
+      } else {
+        setStatus(`修复失败: ${result.error}`);
+        alert(`修复失败: ${result.error}\n请检查日志或网络。`);
+      }
+    } catch (e: any) {
+      setStatus(`修复请求异常: ${e.message}`);
+      console.error(e);
+    } finally {
+      setLoading(false);
+      setIsIndeterminate(false);
+    }
+  };
+
+
+
 
   return (
     <div className="container" style={{ display: 'flex', flexDirection: 'row', height: '100vh', padding: '20px', boxSizing: 'border-box', color: 'white' }}>
@@ -851,6 +905,8 @@ function App() {
         onServiceChange={setAsrService}
         disabled={loading || dubbingLoading || generatingSegmentId !== null}
         onOpenLog={handleOpenLog}
+        onRepairEnv={handleRepairEnv}
+        hasMissingDeps={missingDeps.length > 0}
         themeMode={bgMode}
       />
       <div className="content-wrapper" style={{ position: 'relative', zIndex: 2, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>

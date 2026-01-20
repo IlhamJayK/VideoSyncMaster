@@ -175,13 +175,13 @@ if not MODELS_HUB_DIR:
          MODELS_HUB_DIR = os.path.join(APP_ROOT, "models", "index-tts", "hub")
 
 # 验证模型目录是否存在
+# 验证模型目录是否存在
 if not os.path.exists(MODELS_HUB_DIR):
-    print(f"错误: 模型目录不存在: {MODELS_HUB_DIR}", file=sys.stderr)
-    print(f"请将 'models' 文件夹放在应用根目录: {APP_ROOT}", file=sys.stderr)
-    # We exit here, which explains why user saw nothing happens
-    # But now with DualWriter, it should show in log.
-    sys.exit(1)
-
+    print(f"[WARNING] Model directory not found: {MODELS_HUB_DIR}", file=sys.stderr)
+    print(f"[WARNING] Local WhisperX models will be unavailable. API-based services (Jianying/Bcut) can still be used.", file=sys.stderr)
+    # Don't exit, allow startup for API usage
+    # sys.exit(1)
+    
 log_location = f"Models found at: {MODELS_HUB_DIR}"
 print(log_location)
 

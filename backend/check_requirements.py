@@ -13,6 +13,8 @@ def normalize_name(name):
     """Normalize package name: lower case and replace _ with -"""
     return re.sub(r"[-_.]+", "-", name).lower()
 
+import json
+
 def check_requirements(requirements_path):
     required = set()
     
@@ -58,43 +60,45 @@ def check_requirements(requirements_path):
 
     # 2. Get installed packages
     try:
-        # Debug info
-        # print(f"[Debug] Python Executable: {sys.executable}")
-        
         if 'distributions' in globals():
             installed_dists = list(distributions())
             installed = {normalize_name(dist.metadata["Name"]) for dist in installed_dists}
-            # Debug: print what we found if whisperx is missing
-            # if "whisperx" not in installed:
-            #     print(f"[Debug] Installed packages ({len(installed)}): {sorted(list(installed))}")
         else:
              # Fallback
             installed = {normalize_name(pkg.key) for pkg in pkg_resources.working_set}
             
     except Exception as e:
-        print(f"[Check] 下载包失败: {e}")
-        return False
+        print(f"[Check] Error getting installed packages: {e}")
+        return ["ERROR_GETTING_PACKAGES"]
 
     # 3. Compare
     missing = []
     for pkg in required:
         if pkg not in installed:
             missing.append(pkg)
-
-    if missing:
-        print(f"[Info] 发现缺失的包: {', '.join(missing)}")
-        return False
     
-    return True
+    return missing
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(1)
 
     req_path = sys.argv[1]
-    if check_requirements(req_path):
-        print("[Info] 所有依赖齐全.")
-        sys.exit(0)
+    is_json = "--json" in sys.argv
+
+    missing = check_requirements(req_path)
+
+    if is_json:
+        result = {"missing": missing}
+        print(json.dumps(result))
     else:
-        print("[Info] 发现缺失的包，正在安装...")
+        if not missing:
+            print("[Info] 所有依赖齐全.")
+        else:
+            print(f"[Info] 发现缺失的包: {', '.join(missing)}")
+            print("[Info] 发现缺失的包，正在安装...")
+
+    if missing:
         sys.exit(1)
+    else:
+        sys.exit(0)
