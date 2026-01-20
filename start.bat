@@ -67,7 +67,16 @@ echo ==========================================
 echo                                                                                                                                        
 echo ==========================================
 
-set PATH=%~dp0python;%PATH%
+set PATH=%~dp0python;%~dp0python\Scripts;%PATH%
+
+
+
+echo [INFO] 检查 Python 依赖状态...
+python "%~dp0backend\check_requirements.py" "%~dp0requirements.txt"
+if errorlevel 1 (
+    echo [INFO] 检测到缺失依赖，正在自动补全...
+    python -m pip install -r "%~dp0requirements.txt"
+)
 cd ui
 
 if not exist "node_modules" (
