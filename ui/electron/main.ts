@@ -39,6 +39,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.mjs'),
       webSecurity: false // Allow loading local resources (file://)
     },
+    autoHideMenuBar: true, // Hide the default menu bar (File, Edit, etc.)
   })
   console.log("BrowserWindow created, id:", win.id);
 

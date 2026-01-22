@@ -8,6 +8,7 @@ import CloudBackground from './components/CloudBackground'
 import Sidebar from './components/Sidebar'
 import ModelManager from './components/ModelManager';
 import TTSConfig from './components/TTSConfig';
+import WhisperConfig from './components/WhisperConfig';
 import CompensationStrategy from './components/CompensationStrategy';
 
 
@@ -43,7 +44,7 @@ function App() {
   const [dragTarget, setDragTarget] = useState<'left' | 'middle' | null>(null);
   const [asrService, setAsrService] = useState(() => localStorage.getItem('asrService') || 'whisperx');
   const [missingDeps, setMissingDeps] = useState<string[]>([]);
-  const [currentView, setCurrentView] = useState<'home' | 'models' | 'strategy' | 'tts'>(() => (localStorage.getItem('currentView') as any) || 'home');
+  const [currentView, setCurrentView] = useState<'home' | 'models' | 'strategy' | 'tts' | 'whisper'>(() => (localStorage.getItem('currentView') as any) || 'home');
   const [mergeVersion, setMergeVersion] = useState(0);
 
   useEffect(() => {
@@ -325,11 +326,16 @@ function App() {
       await (window as any).ipcRenderer.invoke('ensure-dir', sessionOutputDir);
       await (window as any).ipcRenderer.invoke('ensure-dir', cacheDir);
 
+      const vadOnset = localStorage.getItem('whisper_vad_onset') || '0.700';
+      const vadOffset = localStorage.getItem('whisper_vad_offset') || '0.700';
+
       const result = await (window as any).ipcRenderer.invoke('run-backend', [
         '--action', 'test_asr',
         '--input', originalVideoPath,
         '--asr', asrService,
-        '--output_dir', cacheDir // Pass cache dir for raw debug files
+        '--output_dir', cacheDir, // Pass cache dir for raw debug files
+        '--vad_onset', vadOnset,
+        '--vad_offset', vadOffset
       ]);
 
       if (abortRef.current) return null;
@@ -990,7 +996,7 @@ function App() {
       <Sidebar
         activeService={currentView === 'home' ? asrService : currentView}
         onServiceChange={(s) => {
-          if (['models', 'strategy', 'tts'].includes(s)) {
+          if (['models', 'strategy', 'tts', 'whisper'].includes(s)) {
             setCurrentView(s as any);
           } else {
             setAsrService(s);
@@ -1017,6 +1023,11 @@ function App() {
       {currentView === 'tts' && (
         <div className="glass-panel" style={{ flex: 1, margin: '20px', zIndex: 2, overflow: 'hidden', position: 'relative' }}>
           <TTSConfig themeMode={bgMode} />
+        </div>
+      )}
+      {currentView === 'whisper' && (
+        <div className="glass-panel" style={{ flex: 1, margin: '20px', zIndex: 2, overflow: 'hidden', position: 'relative' }}>
+          <WhisperConfig themeMode={bgMode} />
         </div>
       )}
       <div className="content-wrapper" style={{ display: currentView === 'home' ? 'flex' : 'none', position: 'relative', zIndex: 2, height: '100%', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>

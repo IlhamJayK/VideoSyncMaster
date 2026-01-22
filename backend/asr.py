@@ -255,12 +255,18 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
 
 
 
-def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None):
+def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None, vad_onset=0.700, vad_offset=0.700):
     """
     Run ASR using WhisperX or Cloud APIs:
     1. Transcribe (Faster-Whisper generic / Cloud)
     2. Align (WhipserX Phoneme Alignment - Only for WhisperX)
     """
+    
+    # ... (code truncated in view, assuming context here is safe to just change signature and below usage)
+    # Actually I need to match the indentation and content correctly.
+    # The signature is at line 258. The usage is at 410.
+    # I should use multi_replace for this to be clean.
+
     
     # If input is video, extract audio first
     ext = os.path.splitext(audio_path)[1].lower()
@@ -408,8 +414,8 @@ def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None):
         # Note: 'min_silence_duration_ms' is not supported by whisperx.load_model via kwargs
         # We tune thresholds instead.
         vad_options = {
-            "vad_onset": 0.700,  # Stricter than 0.550
-            "vad_offset": 0.700  # Stricter than 0.550 (cuts silence sooner)
+            "vad_onset": vad_onset,  
+            "vad_offset": vad_offset
         }
         
         model = whisperx.load_model(

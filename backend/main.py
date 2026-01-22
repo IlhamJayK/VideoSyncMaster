@@ -330,7 +330,7 @@ def translate_text(input_text_or_json, target_lang):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def dub_video(input_path, target_lang, output_path, asr_service="whisperx", **kwargs):
+def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_onset=0.700, vad_offset=0.700, **kwargs):
     print(f"Starting AI Dubbing for {input_path} -> {target_lang} using {asr_service}", flush=True)
     
     # 1. Initialize LLM
@@ -349,7 +349,7 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", **kw
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
         
-    segments = run_asr(input_path, service=asr_service, output_dir=cache_dir) 
+    segments = run_asr(input_path, service=asr_service, output_dir=cache_dir, vad_onset=vad_onset, vad_offset=vad_offset) 
     if not segments:
         return {"success": False, "error": "ASR failed or no speech detected."}
     
@@ -501,6 +501,8 @@ def main():
     parser.add_argument("--cfg_scale", type=float, help="TTS CFG Scale", default=0.7)
     parser.add_argument("--strategy", type=str, help="Video sync strategy: auto_speedup, freeze_frame, frame_blend", default="auto_speedup")
     parser.add_argument("--output_dir", type=str, help="Output directory for debug/intermediate files")
+    parser.add_argument("--vad_onset", type=float, help="VAD onset threshold", default=0.700)
+    parser.add_argument("--vad_offset", type=float, help="VAD offset threshold", default=0.700)
     args = parser.parse_args()
 
     tts_kwargs = {
@@ -518,7 +520,7 @@ def main():
             if not args.json:
                 print(f"Testing ASR on {args.input} using {args.asr}", flush=True)
             # Pass output_dir for raw saving
-            segments = run_asr(args.input, service=args.asr, output_dir=args.output_dir)
+            segments = run_asr(args.input, service=args.asr, output_dir=args.output_dir, vad_onset=args.vad_onset, vad_offset=args.vad_offset)
             if args.json:
                 result_data = segments
             else:

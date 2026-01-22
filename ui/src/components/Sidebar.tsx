@@ -24,6 +24,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disab
     const configServices = [
         { id: 'strategy', name: '音画同步策略 ', icon: '🏃' },
         { id: 'tts', name: 'TTS 配置', icon: '🗣️' },
+        { id: 'whisper', name: 'Whisper 配置', icon: '🎙️' },
     ];
 
     return (
