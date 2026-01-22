@@ -46,3 +46,7 @@ keras==2.9.0
 wetext>=0.0.9; sys_platform != 'linux'
 WeTextProcessing; sys_platform == 'linux'
 
+# GPU / DLL Fixes
+nvidia-cudnn-cu12<9.0.0
+
+

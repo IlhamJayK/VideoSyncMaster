@@ -1,6 +1,8 @@
 import sys
 import os
 import argparse
+import torch
+import pathlib
 
 # Force UTF-8 for stdout/stderr
 sys.stdout.reconfigure(encoding='utf-8')
@@ -203,6 +205,37 @@ if os.path.exists(os.path.join(ffmpeg_bin, "ffmpeg.exe")):
 else:
     print("Portable FFmpeg not found, using system PATH.")
 
+# --- GPU / DLL PATH FIX ---
+# Add PyTorch and NVIDIA cuDNN directories to PATH so ctranslate2/whisperx can find them
+try:
+    import torch
+    import pathlib
+    
+    # 1. Add torch/lib (often contains bundled cuDNN v9, but also dependencies)
+    torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
+    if os.path.exists(torch_lib):
+         os.environ["PATH"] = torch_lib + os.pathsep + os.environ["PATH"]
+         # print(f"[DEBUG] Added torch lib to PATH: {torch_lib}")
+
+    # 2. Add nvidia-cudnn (v8) from site-packages if installed
+    # Expected path: .../Lib/site-packages/nvidia/cudnn/bin
+    site_packages = os.path.dirname(os.path.dirname(torch.__file__)) # torch is in site-packages
+    cudnn_bin = os.path.join(site_packages, "nvidia", "cudnn", "bin")
+    if os.path.exists(cudnn_bin):
+        os.environ["PATH"] = cudnn_bin + os.pathsep + os.environ["PATH"]
+        print(f"[DEBUG] Added nvidia-cudnn v8 bin to PATH: {cudnn_bin}")
+    else:
+        # Fallback: Check local python Lib if not resolved above
+        if not getattr(sys, 'frozen', False):
+             # Try relative to current script for dev env
+             dev_cudnn = os.path.join(os.path.dirname(site_packages), "nvidia", "cudnn", "bin")
+             if os.path.exists(dev_cudnn):
+                 os.environ["PATH"] = dev_cudnn + os.pathsep + os.environ["PATH"]
+
+except Exception as e:
+    print(f"[WARNING] Failed to patch DLL paths: {e}")
+# ---------------------------
+
 from asr import run_asr
 from tts import run_tts, run_batch_tts
 from alignment import align_audio, merge_audios_to_video, get_audio_duration
@@ -297,7 +330,7 @@ def translate_text(input_text_or_json, target_lang):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
+def dub_video(input_path, target_lang, output_path, asr_service="whisperx", **kwargs):
     print(f"Starting AI Dubbing for {input_path} -> {target_lang} using {asr_service}", flush=True)
     
     # 1. Initialize LLM
@@ -306,16 +339,20 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
     # 2. Run ASR
     # 2. Run ASR
     print("Step 1/4: Running ASR...", flush=True)
-    segments = run_asr(input_path, service=asr_service) # List of {start, end, text}
+    
+    output_dir_root = os.path.dirname(output_path)
+    basename = os.path.splitext(os.path.basename(output_path))[0]
+    segments_dir = os.path.join(output_dir_root, f"{basename}_segments") 
+    
+    
+    cache_dir = os.path.join(output_dir_root, ".cache")
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+        
+    segments = run_asr(input_path, service=asr_service, output_dir=cache_dir) 
     if not segments:
         return {"success": False, "error": "ASR failed or no speech detected."}
     
-    # Setup segments dir in output folder (user requested structure: output/TIMESTAMP_NAME/segments)
-    # output_path is usually .../video_dubbed.mp4
-    # We want a directory based on the output filename or just a 'segments' folder next to it?
-    # User said: @[output/1768052886831_1月8日] thus implies a directory.
-    # If output_path is a file, we should make a sibling folder or use the parent if it's already a dedicated folder.
-    # Let's assume output_path is the final video file. We'll create a folder named "{filename_no_ext}_segments".
     
     output_dir = os.path.dirname(output_path)
     basename = os.path.splitext(os.path.basename(output_path))[0]
@@ -332,13 +369,9 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
     new_audio_segments = []
     result_segments = [] 
     
-    # 3. Process Segments
-    # NEW LOGIC: Separate Translation and TTS for VRAM Optimization
     
-    # 3. Phase 1: Translation (Batch)
     print(f"Step 2: Translating {len(segments)} segments...", flush=True)
     
-    # Store intermediate tasks
     tts_tasks = []
     
     for idx, seg in enumerate(segments):
@@ -363,12 +396,10 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
             "original_seg": seg
         })
         
-    # CLEANUP LLM HERE
     print("Translation done. Releasing LLM VRAM...", flush=True)
     translator.cleanup()
     del translator
     
-    # 4. Phase 2: TTS (Batch)
     print(f"Step 3: Cloning Voice for {len(tts_tasks)} segments...", flush=True)
     
     for item in tts_tasks:
@@ -377,7 +408,6 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
         start = item['start']
         duration = item['duration']
         
-        # B. Extract Reference Audio
         ref_clip_path = os.path.join(segments_dir, f"ref_{idx}.wav")
         try:
             (
@@ -392,11 +422,17 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
 
         # C. TTS
         tts_output_path = os.path.join(segments_dir, f"tts_{idx}.wav")
-        success = run_tts(translated_text, ref_clip_path, tts_output_path, language=target_lang)
+        success = run_tts(translated_text, ref_clip_path, tts_output_path, language=target_lang, **kwargs)
         
         if success:
-            # Check duration and align if necessary
-            if duration > 0:
+                
+            should_align = True
+            strategy = kwargs.get('strategy', 'auto_speedup')
+            if strategy in ['frame_blend', 'freeze_frame', 'rife']:
+                should_align = False
+                print(f"    [DubVideo] Strategy is {strategy}, skipping audio alignment.")
+
+            if duration > 0 and should_align:
                 try:
                     current_dur = get_audio_duration(tts_output_path)
                     if current_dur and current_dur > duration + 0.1:
@@ -415,12 +451,14 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
 
             new_audio_segments.append({
                 'start': start,
-                'path': tts_output_path
+                'path': tts_output_path,
+                'duration': duration 
             })
             result_segments.append({
                 "index": idx,
                 "text": translated_text,
-                "audio_path": tts_output_path
+                "audio_path": tts_output_path,
+                "duration": duration
             })
             
             try:
@@ -430,7 +468,7 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx"):
         
     # 4. Merge
     print("Step 4/4: Merging Video...")
-    success = merge_audios_to_video(input_path, new_audio_segments, output_path)
+    success = merge_audios_to_video(input_path, new_audio_segments, output_path, strategy=kwargs.get('strategy', 'auto_speedup'))
     
     if success:
         return {
@@ -446,7 +484,8 @@ def main():
     parser = argparse.ArgumentParser(description="VideoSync Backend")
     parser.add_argument("--action", type=str, help="Action to perform: asr, tts, align, merge_video", default="test_asr")
     parser.add_argument("--input", type=str, help="Input file path or JSON string for complex inputs")
-    parser.add_argument("--ref", type=str, help="Reference audio path for TTS")
+    parser.add_argument("--ref", type=str, help="Reference audio path for TTS (or segments JSON for batch)")
+    parser.add_argument("--ref_audio", type=str, help="Explicit reference audio path (overrides auto-extraction)")
     parser.add_argument("--output", type=str, help="Output path")
     parser.add_argument("--duration", type=float, help="Target duration in seconds for Alignment")
     parser.add_argument("--lang", type=str, help="Target language for translation/dubbing", default="English")
@@ -455,7 +494,22 @@ def main():
     parser.add_argument("--start", type=float, help="Start time in seconds (for generate_single_tts)", default=0.0)
     parser.add_argument("--model_dir", type=str, help="Path to models directory (HF_HOME)")
     parser.add_argument("--asr", type=str, help="ASR service to use: whisperx, jianying, bcut", default="whisperx")
+    parser.add_argument("--temperature", type=float, help="TTS Temperature", default=0.8)
+    parser.add_argument("--top_p", type=float, help="TTS Top_P", default=0.8)
+    parser.add_argument("--top_k", type=int, help="TTS Top_K", default=30)
+    parser.add_argument("--repetition_penalty", type=float, help="TTS Repetition Penalty", default=10.0)
+    parser.add_argument("--cfg_scale", type=float, help="TTS CFG Scale", default=0.7)
+    parser.add_argument("--strategy", type=str, help="Video sync strategy: auto_speedup, freeze_frame, frame_blend", default="auto_speedup")
+    parser.add_argument("--output_dir", type=str, help="Output directory for debug/intermediate files")
     args = parser.parse_args()
+
+    tts_kwargs = {
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "top_k": args.top_k,
+        "repetition_penalty": args.repetition_penalty,
+        "inference_cfg_rate": args.cfg_scale
+    }
 
     result_data = None
     
@@ -463,7 +517,8 @@ def main():
         if args.input:
             if not args.json:
                 print(f"Testing ASR on {args.input} using {args.asr}", flush=True)
-            segments = run_asr(args.input, service=args.asr)
+            # Pass output_dir for raw saving
+            segments = run_asr(args.input, service=args.asr, output_dir=args.output_dir)
             if args.json:
                 result_data = segments
             else:
@@ -478,7 +533,7 @@ def main():
             if not args.json:
                 print(f"Testing TTS.")
             target_lang = args.lang if args.lang else "English"
-            success = run_tts(args.input, args.ref, args.output, language=target_lang)
+            success = run_tts(args.input, args.ref, args.output, language=target_lang, **tts_kwargs)
             if args.json:
                 result_data = {"success": success, "output": args.output}
         else:
@@ -514,6 +569,7 @@ def main():
                     # We need start and end to define slot
                     if 'start' in seg and 'end' in seg and 'path' in seg:
                          target_duration = float(seg['end']) - float(seg['start'])
+                         audio_segments[i]['duration'] = target_duration # Explicitly store for advanced merge
                          audio_path = seg['path']
                          
                          if os.path.exists(audio_path):
@@ -521,17 +577,21 @@ def main():
                              if current_duration:
                                  # If audio is significantly longer than slot (e.g. > 0.1s diff), compress it.
                                  if current_duration > target_duration + 0.1:
-                                     print(f"Segment {i} duration ({current_duration:.2f}s) exceeds slot ({target_duration:.2f}s). Aligning...")
-                                     
-                                     # Create aligned path
-                                     aligned_path = audio_path.replace('.wav', '_aligned.wav')
-                                     
-                                     # Align (compress)
-                                     if align_audio(audio_path, aligned_path, target_duration):
-                                         # Update path in segment to point to aligned file
-                                         audio_segments[i]['path'] = aligned_path
+                                     # Check strategy
+                                     if args.strategy in ['frame_blend', 'freeze_frame', 'rife']:
+                                         print(f"Segment {i} exceeds slot, but strategy is {args.strategy}. Skipping audio alignment.")
                                      else:
-                                         print(f"Failed to align segment {i}, using original.")
+                                         print(f"Segment {i} duration ({current_duration:.2f}s) exceeds slot ({target_duration:.2f}s). Aligning...")
+                                         
+                                         # Create aligned path
+                                         aligned_path = audio_path.replace('.wav', '_aligned.wav')
+                                         
+                                         # Align (compress)
+                                         if align_audio(audio_path, aligned_path, target_duration):
+                                             # Update path in segment to point to aligned file
+                                             audio_segments[i]['path'] = aligned_path
+                                         else:
+                                             print(f"Failed to align segment {i}, using original.")
                                  else:
                                      pass # Fits or is shorter
                              else:
@@ -539,7 +599,7 @@ def main():
                          else:
                              print(f"Audio file not found: {audio_path}")
                 
-                success = merge_audios_to_video(video_path, audio_segments, output_path)
+                success = merge_audios_to_video(video_path, audio_segments, output_path, strategy=args.strategy)
                 
                 if args.json:
                     result_data = {"success": success, "output": output_path}
@@ -569,7 +629,7 @@ def main():
     elif args.action == "dub_video":
         if args.input and args.output:
             target = args.lang if args.lang else "English"
-            result_data = dub_video(args.input, target, args.output, asr_service=args.asr)
+            result_data = dub_video(args.input, target, args.output, asr_service=args.asr, strategy=args.strategy, **tts_kwargs)
             if not args.json:
                 print(result_data)
         else:
@@ -590,17 +650,28 @@ def main():
                 if not text:
                     result_data = {"success": False, "error": "Missing --text argument"}
                 else:
-                    # 1. Extract reference audio
+
+                    # 1. Extract or Use Reference Audio
                     ref_clip_path = output_audio.replace('.wav', '_ref.wav')
-                    try:
-                        ffmpeg.input(video_path, ss=start_time, t=duration).output(
-                            ref_clip_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
-                        ).run(overwrite_output=True)
-                    except Exception as e:
-                        result_data = {"success": False, "error": f"Failed to extract ref audio: {str(e)}"}
-                        if args.json:
-                            print(json.dumps(result_data))
-                        return
+                    
+                    # Check if global ref provided
+                    if args.ref_audio and os.path.exists(args.ref_audio):
+                        print(f"Using explicit reference audio: {args.ref_audio}")
+                        ref_clip_path = args.ref_audio
+                        # Don't delete user's ref file later
+                        should_delete_ref = False
+                    else:
+                        # Extract from video
+                        try:
+                            ffmpeg.input(video_path, ss=start_time, t=duration).output(
+                                ref_clip_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
+                            ).run(overwrite_output=True)
+                            should_delete_ref = True
+                        except Exception as e:
+                            result_data = {"success": False, "error": f"Failed to extract ref audio: {str(e)}"}
+                            if args.json:
+                                print(json.dumps(result_data))
+                            return
                     
                     # 2. Use provided text directly (Do NOT re-translate, to respect user edits)
                     translated_text = text
@@ -609,11 +680,11 @@ def main():
                         result_data = {"success": False, "error": "No text provided"}
                     else:
                         # 3. Generate TTS
-                        success = run_tts(translated_text, ref_clip_path, output_audio, language=target_lang)
+                        success = run_tts(translated_text, ref_clip_path, output_audio, language=target_lang, **tts_kwargs)
                         
                         # 4. Cleanup ref
                         try:
-                            if os.path.exists(ref_clip_path):
+                            if should_delete_ref and os.path.exists(ref_clip_path):
                                 os.remove(ref_clip_path)
                         except:
                             pass
@@ -623,7 +694,12 @@ def main():
                                 try:
                                     current_dur = get_audio_duration(output_audio)
                                     if current_dur and current_dur > duration + 0.1:
-                                        print(f"[SingleTTS] Duration {current_dur:.2f}s > {duration:.2f}s. Aligning...")
+                                        # Check strategy
+                                        strategy = getattr(args, 'strategy', 'auto_speedup')
+                                        if strategy in ['frame_blend', 'freeze_frame', 'rife']:
+                                             print(f"[SingleTTS] Duration {current_dur:.2f}s > {duration:.2f}s. Strategy {strategy}, skipping alignment.")
+                                        else:
+                                            print(f"[SingleTTS] Duration {current_dur:.2f}s > {duration:.2f}s. Aligning...")
                                         temp_aligned = output_audio.replace('.wav', '_aligned_temp.wav')
                                         if align_audio(output_audio, temp_aligned, duration):
                                             import shutil
@@ -682,24 +758,31 @@ def main():
                     extraction_duration = duration
 
                     if duration < 1.0: duration = 1.0 
-                    ref_path = os.path.join(work_dir, f"ref_{i}_{start}.wav")
+                    
                     out_path = seg.get('audioPath') 
                     if not out_path:
                         out_path = os.path.join(work_dir, f"segment_{i}.wav")
-                    
-                    try:
-                        ffmpeg.input(video_path, ss=start, t=extraction_duration).output(
-                            ref_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
-                        ).run(overwrite_output=True)
-                    except Exception as e:
-                        print(f"Failed to extract ref for segment {i}: {e}")
-                        continue
+
+                    if args.ref_audio and os.path.exists(args.ref_audio):
+                        ref_path = args.ref_audio
+                        should_clean_ref = False
+                    else:
+                        ref_path = os.path.join(work_dir, f"ref_{i}_{start}.wav")
+                        should_clean_ref = True
+                        try:
+                            ffmpeg.input(video_path, ss=start, t=extraction_duration).output(
+                                ref_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
+                            ).run(overwrite_output=True)
+                        except Exception as e:
+                            print(f"Failed to extract ref for segment {i}: {e}")
+                            continue
                     
                     tasks.append({
                         "text": text,
                         "ref_audio_path": ref_path,
                         "output_path": out_path,
-                        "index": i
+                        "index": i,
+                        "clean_ref": should_clean_ref
                     })
                 
                 # 2. Run Batch TTS
@@ -710,15 +793,16 @@ def main():
                 # Actually, `generate_batch_tts` didn't have a --lang arg in `main` parser explicitly checked above, 
                 # but `args.lang` defaults to "English".
                 target_lang = args.lang if args.lang else "English"
-                batch_results = run_batch_tts(tasks, language=target_lang) 
+                batch_results = run_batch_tts(tasks, language=target_lang, **tts_kwargs) 
                 
                 # 3. Cleanup Refs & Format Result
                 final_results = []
                 for i, res in enumerate(batch_results):
                     task = tasks[i]
                     # Clean ref
-                    try: os.remove(task['ref_audio_path'])
-                    except: pass
+                    if task.get('clean_ref', True):
+                        try: os.remove(task['ref_audio_path'])
+                        except: pass
                     
                     if res['success']:
                         # Check alignment
@@ -741,22 +825,28 @@ def main():
                                     print(f"[DEBUG] Segment {seg_idx} Actual Duration: {curr}") # Check if None
                                     
                                     if curr and curr > slot_dur + 0.1:
-                                        print(f"[BatchTTS] Segment {seg_idx} duration {curr:.2f}s > {slot_dur:.2f}s. Aligning...")
-                                        temp_aligned = audio_p.replace('.wav', '_aligned_temp.wav')
-                                        if align_audio(audio_p, temp_aligned, slot_dur):
-                                            import shutil
-                                            # Retry loop for windows file lock
-                                            import time
-                                            for _ in range(3):
-                                                try:
-                                                    shutil.move(temp_aligned, audio_p)
-                                                    print(f"[BatchTTS] Aligned and overwritten: {audio_p}")
-                                                    break
-                                                except Exception as move_err:
-                                                    print(f"[BatchTTS] Warning: Move failed {move_err}, retrying...")
-                                                    time.sleep(0.5)
+                                        # Check strategy
+                                        strategy = args.strategy if hasattr(args, 'strategy') else 'auto_speedup'
+                                        
+                                        if strategy in ['frame_blend', 'freeze_frame', 'rife']:
+                                            print(f"[BatchTTS] Strategy {strategy}, skipping alignment for segment {seg_idx}.")
                                         else:
-                                            print(f"[BatchTTS] align_audio returned False")
+                                            print(f"[BatchTTS] Segment {seg_idx} duration {curr:.2f}s > {slot_dur:.2f}s. Aligning...")
+                                            temp_aligned = audio_p.replace('.wav', '_aligned_temp.wav')
+                                            if align_audio(audio_p, temp_aligned, slot_dur):
+                                                import shutil
+                                                # Retry loop for windows file lock
+                                                import time
+                                                for _ in range(3):
+                                                    try:
+                                                        shutil.move(temp_aligned, audio_p)
+                                                        print(f"[BatchTTS] Aligned and overwritten: {audio_p}")
+                                                        break
+                                                    except Exception as move_err:
+                                                        print(f"[BatchTTS] Warning: Move failed {move_err}, retrying...")
+                                                        time.sleep(0.5)
+                                            else:
+                                                print(f"[BatchTTS] align_audio returned False")
                                     else:
                                         print(f"[BatchTTS] Segment {seg_idx} fits ({curr} <= {slot_dur + 0.1})")
                                 else:
@@ -797,7 +887,8 @@ def main():
     try:
         if args.action == 'asr':
             debug_log(f"Running ASR on: {args.input}")
-            result_data = run_asr(args.input, args.model, service=args.asr)
+            # Pass output_dir if provided
+            result_data = run_asr(args.input, args.model, service=args.asr, output_dir=args.output_dir)
         elif args.action == 'translate_text':
              # ... (rest of logic handles exceptions internally, but good to catch top level)
              # Handled inside specific functions or below

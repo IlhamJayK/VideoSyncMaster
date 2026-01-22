@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron'
 
 console.log("Main process script loaded.");
 process.on('uncaughtException', (error) => {
@@ -7,8 +7,10 @@ process.on('uncaughtException', (error) => {
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
-import { spawn } from 'child_process'
+import { spawn, exec, ChildProcess } from 'child_process'
 import fs from 'fs'
+
+const activeDownloads = new Map<string, ChildProcess>();
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -76,6 +78,12 @@ app.whenReady().then(() => {
         else resolve(true)
       })
     })
+  })
+
+  // IPC Handler for file dialog
+  ipcMain.handle('dialog:openFile', async (_event, options) => {
+    if (!win) return { canceled: true, filePaths: [] }
+    return await dialog.showOpenDialog(win, options)
   })
 
   // IPC Handler for directory creation
@@ -545,4 +553,310 @@ app.whenReady().then(() => {
       }
     });
   })
+
+  // Helper function to resolve Models Root
+  const resolveModelsRoot = () => {
+    let modelsRoot = '';
+    let projectRoot = '';
+
+    if (app.isPackaged) {
+      projectRoot = path.dirname(process.resourcesPath);
+      if (process.env.PORTABLE_EXECUTABLE_DIR) {
+        modelsRoot = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'models');
+      } else {
+        modelsRoot = path.join(projectRoot, 'models');
+      }
+    } else {
+      // In Dev: Strict Project Root Only
+      projectRoot = path.resolve(process.env.APP_ROOT, '..');
+      modelsRoot = path.join(projectRoot, 'models');
+    }
+    return { modelsRoot, projectRoot };
+  };
+
+  // IPC Handler to check model status
+  ipcMain.handle('check-model-status', async (_event) => {
+    return new Promise((resolve) => {
+      try {
+        const { modelsRoot } = resolveModelsRoot();
+        console.log('[CheckModel] Models Root:', modelsRoot);
+
+        const checkDir = (subpath: string[]) => {
+          // Check variations
+          for (const p of subpath) {
+            const fullPath = path.join(modelsRoot, p);
+            if (fs.existsSync(fullPath)) return true;
+          }
+          return false;
+        };
+
+        // Specific checks
+        const status = {
+          whisperx: checkDir(['faster-whisper-large-v3-turbo-ct2', 'whisperx/faster-whisper-large-v3-turbo-ct2']),
+          alignment: checkDir(['alignment']),
+          index_tts: checkDir(['index-tts', 'index-tts/hub']),
+          qwen: checkDir(['Qwen2.5-7B-Instruct', 'qwen/Qwen2.5-7B-Instruct']),
+          rife: checkDir(['rife', 'rife-ncnn-vulkan'])
+        };
+
+        resolve({ success: true, status, root: modelsRoot });
+
+      } catch (e: any) {
+        resolve({ success: false, error: e.message });
+      }
+    });
+  });
+
+
+  // IPC Handler to Cancel Download
+  // IPC Handler to Cancel Download
+  ipcMain.handle('cancel-download', async (_event, args) => {
+    const { key, model } = args; // Expect key, fallback to model
+    const trackingKey = key || model;
+
+    const proc = activeDownloads.get(trackingKey);
+    if (proc) {
+      console.log(`[DownloadModel] Cancelling download for ${trackingKey} (PID: ${proc.pid})`);
+
+      // Force kill
+      if (process.platform === 'win32' && proc.pid) {
+        exec(`taskkill /pid ${proc.pid} /T /F`, (err) => {
+          if (err) console.error("Taskkill error:", err);
+        });
+      }
+
+      proc.kill(); // Fallback/Standard kill
+      activeDownloads.delete(trackingKey);
+      return { success: true };
+    }
+    return { success: false, error: 'Download not found' };
+  });
+
+  // IPC Handler to cancel general file download
+  ipcMain.handle('cancel-file-download', async (_event, args) => {
+    const { key } = args;
+    // Re-use logic if possible, or maintain separate map
+    const proc = activeDownloads.get(key);
+    if (proc) {
+      console.log(`[DownloadFile] Cancelling ${key} (PID: ${proc.pid})`);
+      if (process.platform === 'win32' && proc.pid) {
+        exec(`taskkill /pid ${proc.pid} /T /F`, () => { });
+      }
+      proc.kill();
+      activeDownloads.delete(key);
+      return { success: true };
+    }
+    return { success: false, error: 'Not found' };
+  });
+
+  // IPC Handler for Generic File Download (e.g. RIFE ncnn)
+  ipcMain.handle('download-file', async (_event, args) => {
+    return new Promise((resolve) => {
+      try {
+        const { url, targetDir, key, name } = args;
+        const { modelsRoot, projectRoot } = resolveModelsRoot();
+
+        const finalDir = path.join(modelsRoot, targetDir);
+        if (!fs.existsSync(finalDir)) {
+          fs.mkdirSync(finalDir, { recursive: true });
+        }
+
+        console.log(`[DownloadFile] ${name} -> ${finalDir}`);
+
+        const pythonExe = getPythonExe(projectRoot);
+
+        // Python script to download and unzip
+        // Using python ensures we don't need extra node deps like 'adm-zip' or 'axios' if not bundled
+        const script = `
+import sys
+import os
+import urllib.request
+import zipfile
+import shutil
+
+url = "${url}"
+out_dir = r"${finalDir.replace(/\\/g, '\\\\')}"
+zip_path = os.path.join(out_dir, "temp_download.zip")
+
+def progress(count, block_size, total_size):
+    percent = int(count * block_size * 100 / total_size)
+    # limit output freq
+    if count % 100 == 0:
+        print(f"PROGRESS:{percent}", flush=True)
+
+try:
+    print(f"Downloading {url}...")
+    urllib.request.urlretrieve(url, zip_path, reporthook=progress)
+    print("Download complete. Extracting...")
+    
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(out_dir)
+        
+    print("Extraction complete.")
+    os.remove(zip_path)
+    print("SUCCESS")
+except Exception as e:
+    print(f"ERROR: {e}")
+`;
+        const proc = spawn(pythonExe, ['-c', script], {
+          env: { ...process.env, PYTHONUTF8: '1' }
+        });
+
+        if (key) activeDownloads.set(key, proc);
+
+        let output = '';
+        let errorOut = '';
+
+        proc.stdout.on('data', (data) => {
+          const s = data.toString();
+          console.log(`[DownloadFile]: ${s}`);
+          output += s;
+        });
+        proc.stderr.on('data', (data) => {
+          const s = data.toString();
+          console.error(`[DownloadFile Err]: ${s}`);
+          errorOut += s;
+        });
+
+        proc.on('close', (code) => {
+          if (key) activeDownloads.delete(key);
+          if (code === 0 && output.includes('SUCCESS')) {
+            resolve({ success: true });
+          } else {
+            resolve({ success: false, error: `Failed (Code ${code})\n${errorOut}` });
+          }
+        });
+
+      } catch (e: any) {
+        resolve({ success: false, error: e.message });
+      }
+    });
+  });
+
+  // Helper to resolve python path (refactored from download-model)
+  function getPythonExe(projectRoot: string) {
+    if (app.isPackaged) {
+      let p = path.join(process.resourcesPath, 'python', 'python.exe');
+      if (fs.existsSync(p)) return p;
+      return path.join(projectRoot, 'python', 'python.exe');
+    } else {
+      let p = path.join(projectRoot, 'python', 'python.exe');
+      if (fs.existsSync(p)) return p;
+      return 'python';
+    }
+  }
+
+  // IPC Handler for Model Download
+  ipcMain.handle('download-model', async (_event, args) => {
+    return new Promise((resolve) => {
+      try {
+        const { model, localDir, key } = args;
+        const trackingKey = key || model;
+
+        // Resolve closest/active models root
+        const { modelsRoot, projectRoot } = resolveModelsRoot();
+
+        // subpath should be relative to models directory, but args.localDir 'models/index-tts/hub' includes 'models/'
+        // We need to strip 'models/' prefix if we are joining with modelsRoot
+        const relativePath = localDir.replace(/^models[\\/]/, '');
+        const targetPath = path.join(modelsRoot, relativePath);
+
+        console.log(`[DownloadModel] Target: ${targetPath}`);
+
+        // Ensure directory exists
+        if (!fs.existsSync(targetPath)) {
+          fs.mkdirSync(targetPath, { recursive: true });
+        }
+
+        // Determine python path
+        let pythonExe = '';
+        if (app.isPackaged) {
+          pythonExe = path.join(process.resourcesPath, 'python', 'python.exe');
+          if (!fs.existsSync(pythonExe)) {
+            pythonExe = path.join(projectRoot, 'python', 'python.exe');
+          }
+        } else {
+          if (fs.existsSync(path.join(projectRoot, 'python', 'python.exe'))) {
+            pythonExe = path.join(projectRoot, 'python', 'python.exe');
+          } else {
+            pythonExe = 'python';
+          }
+        }
+
+        // Construct Python Script
+        // We use python -c to run modelscope download
+        // Escape backslashes for python string
+        const safeTarget = targetPath.replace(/\\/g, '\\\\');
+        const script = `
+try:
+    from modelscope.hub.snapshot_download import snapshot_download
+    model_id = '${model}'
+    target_dir = '${safeTarget}'
+    print(f"Downloading {model_id} to {target_dir}...")
+    snapshot_download(model_id, local_dir=target_dir)
+    print("SUCCESS")
+except Exception as e:
+    print(f"ERROR: {e}")
+`;
+
+        console.log(`[DownloadModel] Spawning python...`);
+
+        // Log to logs/backend_debug.log
+        const logFile = path.join(projectRoot, 'logs', 'backend_debug.log');
+        const logDir = path.dirname(logFile);
+        if (!fs.existsSync(logDir)) {
+          try { fs.mkdirSync(logDir, { recursive: true }); } catch (e) { console.error("Failed to create log dir", e); }
+        }
+
+        let logStream: fs.WriteStream | null = null;
+        try {
+          logStream = fs.createWriteStream(logFile, { flags: 'a' });
+          logStream.write(`\n[${new Date().toISOString()}] [DownloadModel] Starting download: ${model} -> ${targetPath}\n`);
+        } catch (e) {
+          console.error("Failed to create log stream", e);
+        }
+
+        const proc = spawn(pythonExe, ['-c', script], {
+          env: { ...process.env, PYTHONUTF8: '1' }
+        });
+
+        activeDownloads.set(trackingKey, proc);
+
+        let output = '';
+        let errorOut = '';
+
+        proc.stdout.on('data', (data) => {
+          const s = data.toString();
+          console.log(`[ModelScope]: ${s}`);
+          output += s;
+          if (logStream) logStream.write(s);
+        });
+        proc.stderr.on('data', (data) => {
+          const s = data.toString();
+          console.error(`[ModelScope Err]: ${s}`);
+          errorOut += s;
+          if (logStream) logStream.write(`[STDERR] ${s}`);
+        });
+
+        proc.on('close', (code) => {
+          if (activeDownloads.has(trackingKey)) {
+            activeDownloads.delete(trackingKey);
+          }
+          if (logStream) {
+            logStream.write(`\n[${new Date().toISOString()}] [DownloadModel] Finished with code ${code}\n`);
+            logStream.end();
+          }
+
+          if (code === 0 && output.includes('SUCCESS')) {
+            resolve({ success: true });
+          } else {
+            resolve({ success: false, error: `Process failed (Code ${code}). \n${errorOut}\n${output}` });
+          }
+        });
+
+      } catch (e: any) {
+        resolve({ success: false, error: e.message });
+      }
+    });
+  });
 })

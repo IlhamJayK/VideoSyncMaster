@@ -26,6 +26,8 @@ export interface TranslationPanelProps {
     activeIndex?: number;
     onEditStart?: (index: number) => void;
     onEditEnd?: () => void;
+    onUploadSubtitle?: (file: File) => void;
+    hasVideo?: boolean;
 }
 
 const TranslationPanel: React.FC<TranslationPanelProps> = ({
@@ -50,8 +52,27 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
     playingAudioIndex,
     activeIndex,
     onEditStart,
-    onEditEnd
+    onEditEnd,
+    onUploadSubtitle,
+    hasVideo = false
 }) => {
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const file = e.dataTransfer.files[0];
+            if (file.name.endsWith('.srt')) {
+                onUploadSubtitle?.(file);
+            }
+        }
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
     const formatTimestamp = (seconds: number): string => {
         if (seconds < 60) {
             return `${seconds.toFixed(2)}s`;
@@ -91,23 +112,55 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
             <div style={{ position: 'sticky', top: 0, background: 'var(--bg-secondary)', zIndex: 10, padding: '10px', borderRadius: '8px', borderBottom: '1px solid var(--border-color)', minHeight: '110px', boxSizing: 'border-box' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>3. 翻译字幕</h3>
-                    <button
-                        onClick={onTranslateAndDub}
-                        disabled={segments.length === 0 || loading || dubbingLoading}
-                        className="btn"
-                        style={{
-                            padding: '4px 12px',
-                            background: '#8b5cf6', // Violet
-                            fontSize: '0.9em',
-                            height: 'auto', // Will match h3 roughly or be set explicitly
-                            cursor: (segments.length === 0 || loading || dubbingLoading) ? 'not-allowed' : 'pointer',
-                            opacity: (segments.length === 0 || loading || dubbingLoading) ? 0.7 : 1,
-                            flex: 1, // To stretch? User said length sum of others.
-                            marginLeft: '15px'
-                        }}
-                    >
-                        翻译+生成配音
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', flex: 1, marginLeft: '15px', gap: '10px' }}>
+                        <input
+                            type="file"
+                            accept=".srt"
+                            ref={fileInputRef}
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                                if (e.target.files && e.target.files.length > 0) {
+                                    onUploadSubtitle?.(e.target.files[0]);
+                                    e.target.value = ''; // Reset
+                                }
+                            }}
+                        />
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            onDrop={handleDrop}
+                            onDragOver={handleDragOver}
+                            className="btn"
+                            disabled={!hasVideo || loading || dubbingLoading}
+                            title={!hasVideo ? "请先上传视频" : "点击上传或拖拽SRT文件至此"}
+                            style={{
+                                padding: '4px 12px',
+                                background: (!hasVideo || loading || dubbingLoading) ? '#4b5563' : '#10b981', // Gray if disabled
+                                fontSize: '0.9em',
+                                height: 'auto',
+                                cursor: (!hasVideo || loading || dubbingLoading) ? 'not-allowed' : 'pointer',
+                                flex: 1,
+                                opacity: (!hasVideo || loading || dubbingLoading) ? 0.7 : 1
+                            }}
+                        >
+                            上传译文字幕
+                        </button>
+                        <button
+                            onClick={onTranslateAndDub}
+                            disabled={segments.length === 0 || loading || dubbingLoading}
+                            className="btn"
+                            style={{
+                                padding: '4px 12px',
+                                background: '#8b5cf6', // Violet
+                                fontSize: '0.9em',
+                                height: 'auto', // Will match h3 roughly or be set explicitly
+                                cursor: (segments.length === 0 || loading || dubbingLoading) ? 'not-allowed' : 'pointer',
+                                opacity: (segments.length === 0 || loading || dubbingLoading) ? 0.7 : 1,
+                                flex: 1
+                            }}
+                        >
+                            翻译+生成配音
+                        </button>
+                    </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '5px', marginBottom: '10px' }}>

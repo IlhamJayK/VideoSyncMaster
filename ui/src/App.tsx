@@ -6,6 +6,9 @@ import Timeline, { Segment } from './components/Timeline'
 import TranslationPanel from './components/TranslationPanel'
 import CloudBackground from './components/CloudBackground'
 import Sidebar from './components/Sidebar'
+import ModelManager from './components/ModelManager';
+import TTSConfig from './components/TTSConfig';
+import CompensationStrategy from './components/CompensationStrategy';
 
 
 function App() {
@@ -30,18 +33,19 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [isIndeterminate, setIsIndeterminate] = useState(false);
   const [translatedSegments, setTranslatedSegments] = useState<Segment[]>([])
-  const [targetLang, setTargetLang] = useState('English')
+  const [targetLang, setTargetLang] = useState(() => localStorage.getItem('targetLang') || 'English')
   const [mergedVideoPath, setMergedVideoPath] = useState<string>('')
   const timelineRef = useRef<HTMLDivElement>(null);
   const translationRef = useRef<HTMLDivElement>(null);
   const isScrollingRef = useRef<null | 'timeline' | 'translation'>(null);
-  const [leftWidth, setLeftWidth] = useState(400);
-  const [timelineWidth, setTimelineWidth] = useState(500);
+  const [leftWidth, setLeftWidth] = useState(() => parseInt(localStorage.getItem('leftWidth') || '400'));
+  const [timelineWidth, setTimelineWidth] = useState(() => parseInt(localStorage.getItem('timelineWidth') || '500'));
   const [dragTarget, setDragTarget] = useState<'left' | 'middle' | null>(null);
-  const [asrService, setAsrService] = useState('whisperx');
+  const [asrService, setAsrService] = useState(() => localStorage.getItem('asrService') || 'whisperx');
   const [missingDeps, setMissingDeps] = useState<string[]>([]);
+  const [currentView, setCurrentView] = useState<'home' | 'models' | 'strategy' | 'tts'>(() => (localStorage.getItem('currentView') as any) || 'home');
+  const [mergeVersion, setMergeVersion] = useState(0);
 
-  // Check Python environment on mount
   useEffect(() => {
     const checkEnv = async () => {
       try {
@@ -59,6 +63,14 @@ function App() {
     };
     checkEnv();
   }, []);
+
+  // Persistence for Settings
+  useEffect(() => { localStorage.setItem('targetLang', targetLang); }, [targetLang]);
+  useEffect(() => { localStorage.setItem('asrService', asrService); }, [asrService]);
+  useEffect(() => { localStorage.setItem('leftWidth', leftWidth.toString()); }, [leftWidth]);
+  useEffect(() => { localStorage.setItem('timelineWidth', timelineWidth.toString()); }, [timelineWidth]);
+  useEffect(() => { localStorage.setItem('currentView', currentView); }, [currentView]);
+
   useEffect(() => {
     const validateLayout = () => {
       const sidebarWidth = 80;
@@ -298,10 +310,26 @@ function App() {
     setStatus('正在识别字幕...');
 
     try {
+      // Calculate paths first
+      const paths = await (window as any).ipcRenderer.invoke('get-paths');
+      const outputRoot = paths.outputDir;
+      const projectRoot = paths.projectRoot; // Available from backend
+      const filenameWithExt = originalVideoPath.split(/[\\/]/).pop() || "video.mp4";
+      const filenameNoExt = filenameWithExt.replace(/\.[^/.]+$/, "");
+
+      const sessionOutputDir = `${outputRoot}\\${filenameNoExt}`;
+      // Corrected Cache Path: ProjectRoot/.cache/VideoName
+      const cacheDir = `${projectRoot}\\.cache\\${filenameNoExt}`;
+
+      // Ensure directories exist
+      await (window as any).ipcRenderer.invoke('ensure-dir', sessionOutputDir);
+      await (window as any).ipcRenderer.invoke('ensure-dir', cacheDir);
+
       const result = await (window as any).ipcRenderer.invoke('run-backend', [
         '--action', 'test_asr',
         '--input', originalVideoPath,
-        '--asr', asrService
+        '--asr', asrService,
+        '--output_dir', cacheDir // Pass cache dir for raw debug files
       ]);
 
       if (abortRef.current) return null;
@@ -314,22 +342,18 @@ function App() {
         // Update state
         setSegments(result);
 
-        const paths = await (window as any).ipcRenderer.invoke('get-paths');
-        const outputRoot = paths.outputDir;
-        const filenameWithExt = videoPath.split(/[\\/]/).pop() || "video.mp4";
-        const filenameNoExt = filenameWithExt.replace(/\.[^/.]+$/, "");
-        const sessionOutputDir = `${outputRoot}\\${filenameNoExt}`;
-
-        await (window as any).ipcRenderer.invoke('ensure-dir', sessionOutputDir);
-
         const srtContent = result.map((seg: any, index: number) => {
           return `${index + 1}\n${formatTimeSRT(seg.start)} --> ${formatTimeSRT(seg.end)}\n${seg.text}\n`;
         }).join('\n');
 
-        const srtPath = `${sessionOutputDir}\\${filenameNoExt}.srt`;
+        const srtPath = `${cacheDir}\\${filenameNoExt}.srt`; // Save to .cache
         await (window as any).ipcRenderer.invoke('save-file', srtPath, srtContent);
 
-        setStatus(`识别完成，SRT已保存至 ${srtPath}。请在下方编辑字幕。`);
+        // Also Save segments JSON to cache for referencing later
+        const jsonPath = `${cacheDir}\\audio_segments.json`;
+        await (window as any).ipcRenderer.invoke('save-file', jsonPath, JSON.stringify(result, null, 2));
+
+        setStatus(`识别完成，SRT及数据已保存至 ${cacheDir}。请在下方编辑字幕。`);
         return result;
       } else {
         setStatus('识别失败：输出格式无效。');
@@ -421,7 +445,14 @@ function App() {
 
       const audioPath = `${segmentsDir}\\segment_${index}.wav`;
 
-      const result = await (window as any).ipcRenderer.invoke('run-backend', [
+      // Read advanced TTS config
+      const ttsTemp = localStorage.getItem('tts_temperature') || '0.8';
+      const ttsTopP = localStorage.getItem('tts_top_p') || '0.8';
+      const ttsRepPen = localStorage.getItem('tts_repetition_penalty') || '10.0';
+      const ttsCfg = localStorage.getItem('tts_cfg_scale') || '0.7';
+      const ttsRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
+
+      const args = [
         '--action', 'generate_single_tts',
         '--input', originalVideoPath,
         '--output', audioPath,
@@ -429,8 +460,19 @@ function App() {
         '--start', seg.start.toString(),
         '--duration', (seg.end - seg.start).toString(),
         '--lang', targetLang,
+        '--temperature', ttsTemp,
+        '--top_p', ttsTopP,
+        '--repetition_penalty', ttsRepPen,
+        '--cfg_scale', ttsCfg,
+        '--strategy', localStorage.getItem('compensation_strategy') || 'auto_speedup',
         '--json'
-      ]);
+      ];
+
+      if (ttsRefAudio) {
+        args.push('--ref_audio', ttsRefAudio);
+      }
+
+      const result = await (window as any).ipcRenderer.invoke('run-backend', args);
 
       if (result && result.success) {
         setTranslatedSegments(prev => {
@@ -488,12 +530,30 @@ function App() {
 
       if (abortRef.current) return null;
 
-      const result = await (window as any).ipcRenderer.invoke('run-backend', [
+      // Read advanced TTS config
+      const ttsTemp = localStorage.getItem('tts_temperature') || '0.8';
+      const ttsTopP = localStorage.getItem('tts_top_p') || '0.8';
+      const ttsRepPen = localStorage.getItem('tts_repetition_penalty') || '10.0';
+      const ttsCfg = localStorage.getItem('tts_cfg_scale') || '0.7';
+      const ttsRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
+
+      const args = [
         '--action', 'generate_batch_tts',
         '--input', originalVideoPath,
         '--ref', tempJsonPath,
+        '--temperature', ttsTemp,
+        '--top_p', ttsTopP,
+        '--repetition_penalty', ttsRepPen,
+        '--cfg_scale', ttsCfg,
+        '--strategy', localStorage.getItem('compensation_strategy') || 'auto_speedup', // Pass strategy
         '--json'
-      ]);
+      ];
+
+      if (ttsRefAudio) {
+        args.push('--ref_audio', ttsRefAudio);
+      }
+
+      const result = await (window as any).ipcRenderer.invoke('run-backend', args);
 
       if (abortRef.current) return null;
 
@@ -587,17 +647,24 @@ function App() {
       if (abortRef.current) return false;
 
       const paths = await (window as any).ipcRenderer.invoke('get-paths');
+      const projectRoot = paths.projectRoot;
       const filename = originalVideoPath.split(/[\\/]/).pop() || "video.mp4";
       const filenameNoExt = filename.replace(/\.[^/.]+$/, "");
       const outputPath = `${paths.outputDir}\\${filenameNoExt}\\${filenameNoExt}_dubbed_${targetLang}.mp4`;
       const segmentsDir = `${paths.outputDir}\\${filenameNoExt}`;
-      const jsonPath = `${segmentsDir}\\audio_segments.json`;
+      const cacheDir = `${projectRoot}\\.cache\\${filenameNoExt}`;
+
+      // Ensure cache dir exists
+      await (window as any).ipcRenderer.invoke('ensure-dir', cacheDir);
+
+      const jsonPath = `${cacheDir}\\audio_segments.json`; // Save intermediate JSON to .cache
 
       // Filter and map segments for backend
       const audioSegments = segsToUse
         .filter(s => s.audioPath)
         .map(s => ({
           start: s.start,
+          end: s.end,
           path: s.audioPath
         }));
 
@@ -606,12 +673,16 @@ function App() {
 
       if (abortRef.current) return false;
 
+      // Read Compensation Strategy
+      const strategy = localStorage.getItem('compensation_strategy') || 'auto_speedup';
+
       // Call merge_video
       const result = await (window as any).ipcRenderer.invoke('run-backend', [
         '--action', 'merge_video',
         '--input', originalVideoPath,
         '--ref', jsonPath,
-        '--output', outputPath
+        '--output', outputPath,
+        '--strategy', strategy
       ]);
 
       if (abortRef.current) return false;
@@ -620,6 +691,7 @@ function App() {
         setStatus("配音合并完成！");
         // setVideoPath(result.output); // Keep original video in the source player
         setMergedVideoPath(result.output);
+        setMergeVersion(v => v + 1);
         return true;
       } else {
         setStatus(`合并失败: ${result?.error || '未知错误'}`);
@@ -762,51 +834,66 @@ function App() {
   };
 
 
+
+
+  const parseSRTContent = (text: string): Segment[] => {
+    // Normalize line endings
+    const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const regex = /(\d+)\s*\n\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*\n([\s\S]*?)(?=\n\d+\s*\n\s*\d{2}:\d{2}[:.]|$)/g;
+
+    const newSegments: Segment[] = [];
+    let match;
+    const parseTime = (t: string) => {
+      const cleanT = t.replace(',', '.');
+      const [h, m, s] = cleanT.split(':');
+      return parseFloat(h) * 3600 + parseFloat(m) * 60 + parseFloat(s);
+    };
+
+    while ((match = regex.exec(normalizedText)) !== null) {
+      const content = match[4].trim();
+      if (content) {
+        newSegments.push({
+          start: parseTime(match[2]),
+          end: parseTime(match[3]),
+          text: content
+        });
+      }
+    }
+    return newSegments;
+  };
+
   const handleSRTUpload = (file: File) => {
     if (!originalVideoPath) return;
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
       if (text) {
-        // Normalize line endings to \n
-        const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-        // Parse SRT:
-        // 1. Index (digits)
-        // 2. Timestamp --> Timestamp (flexible spacing)
-        // 3. Content (multi-line, non-greedy utf8 safe)
-        // 4. Lookahead for next index or EOF
-        const regex = /(\d+)\s*\n\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*\n([\s\S]*?)(?=\n\d+\s*\n\s*\d{2}:\d{2}[:.]|$)/g;
-
-        const newSegments: Segment[] = [];
-        let match;
-        const parseTime = (t: string) => {
-          // Improve time parsing for both comma and dot decimals
-          const cleanT = t.replace(',', '.');
-          const [h, m, s] = cleanT.split(':');
-          return parseFloat(h) * 3600 + parseFloat(m) * 60 + parseFloat(s);
-        };
-
-        while ((match = regex.exec(normalizedText)) !== null) {
-          const content = match[4].trim();
-          // Filter out empty lines if any remain
-          if (content) {
-            newSegments.push({
-              start: parseTime(match[2]),
-              end: parseTime(match[3]),
-              text: content
-            });
-          }
-        }
-
+        const newSegments = parseSRTContent(text);
         if (newSegments.length > 0) {
           setSegments(newSegments);
-          setStatus(`已加载外部字幕 (${newSegments.length} 条)`);
+          setStatus(`已加载外部源字幕 (${newSegments.length} 条)`);
         } else {
-          console.warn("SRT Regex matched nothing. Text sample:", normalizedText.slice(0, 200));
-          // Fallback simple line-based parser if regex fails excessively?
-          // For now, allow empty status if truly failed, but log it.
           setStatus(`字幕解析失败：未找到有效字幕片段`);
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleTargetSRTUpload = (file: File) => {
+    if (!originalVideoPath) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (text) {
+        const newSegments = parseSRTContent(text);
+        if (newSegments.length > 0) {
+          // Ensure audioStatus is reset for new translations
+          const preparedSegments = newSegments.map(s => ({ ...s, audioStatus: 'none' as const }));
+          setTranslatedSegments(preparedSegments);
+          setStatus(`已加载译文字幕 (${newSegments.length} 条)`);
+        } else {
+          setStatus(`译文字幕解析失败：未找到有效字幕片段`);
         }
       }
     };
@@ -863,7 +950,7 @@ function App() {
 
 
   return (
-    <div className="container" style={{ display: 'flex', flexDirection: 'row', height: '100vh', padding: '20px', boxSizing: 'border-box', color: 'white' }}>
+    <div className="container" style={{ display: 'flex', flexDirection: 'row', height: '100vh', padding: '20px', boxSizing: 'border-box' }}>
       <theme-button
         key="theme-btn-3"
         ref={themeBtnRef}
@@ -901,15 +988,38 @@ function App() {
 
       {/* Main Content Wrapper (z-index 2) */}
       <Sidebar
-        activeService={asrService}
-        onServiceChange={setAsrService}
-        disabled={loading || dubbingLoading || generatingSegmentId !== null}
+        activeService={currentView === 'home' ? asrService : currentView}
+        onServiceChange={(s) => {
+          if (['models', 'strategy', 'tts'].includes(s)) {
+            setCurrentView(s as any);
+          } else {
+            setAsrService(s);
+            setCurrentView('home');
+          }
+        }}
+        disabled={false}
         onOpenLog={handleOpenLog}
         onRepairEnv={handleRepairEnv}
+        onOpenModels={() => setCurrentView('models')}
         hasMissingDeps={missingDeps.length > 0}
         themeMode={bgMode}
       />
-      <div className="content-wrapper" style={{ position: 'relative', zIndex: 2, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
+      {currentView === 'models' && (
+        <div className="glass-panel" style={{ flex: 1, margin: '20px', zIndex: 2, overflow: 'hidden', position: 'relative' }}>
+          <ModelManager themeMode={bgMode} />
+        </div>
+      )}
+      {currentView === 'strategy' && (
+        <div className="glass-panel" style={{ flex: 1, margin: '20px', zIndex: 2, overflow: 'hidden', position: 'relative' }}>
+          <CompensationStrategy themeMode={bgMode} />
+        </div>
+      )}
+      {currentView === 'tts' && (
+        <div className="glass-panel" style={{ flex: 1, margin: '20px', zIndex: 2, overflow: 'hidden', position: 'relative' }}>
+          <TTSConfig themeMode={bgMode} />
+        </div>
+      )}
+      <div className="content-wrapper" style={{ display: currentView === 'home' ? 'flex' : 'none', position: 'relative', zIndex: 2, height: '100%', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
         <h1 style={{
           textAlign: 'center',
           marginBottom: '5px',
@@ -1075,7 +1185,7 @@ function App() {
               {mergedVideoPath && (
                 <div style={{ marginBottom: '15px', position: 'relative', background: 'black', borderRadius: '4px', overflow: 'hidden' }}>
                   <video
-                    src={mergedVideoPath.startsWith('file:') ? mergedVideoPath : `file:///${encodeURI(mergedVideoPath.replace(/\\/g, '/'))}`}
+                    src={(mergedVideoPath.startsWith('file:') ? mergedVideoPath : `file:///${encodeURI(mergedVideoPath.replace(/\\/g, '/'))}`) + `?v=${mergeVersion}`}
                     controls
                     style={{ width: '100%', display: 'block' }}
                   />
@@ -1232,6 +1342,11 @@ function App() {
               retranslatingSegmentId={retranslatingSegmentId}
               domRef={translationRef}
               onScroll={() => handleScroll('translation')}
+              onUploadSubtitle={handleTargetSRTUpload}
+
+              hasVideo={!!originalVideoPath}
+
+
               currentTime={currentTime}
               dubbingLoading={dubbingLoading}
               onReTranslate={handleReTranslate}

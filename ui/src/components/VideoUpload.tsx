@@ -20,10 +20,12 @@ const VideoUpload: React.FC<VideoUploadProps> = ({ onFileSelected, onTimeUpdate,
     const [isDragging, setIsDragging] = React.useState(false);
     const [statusText, setStatusText] = React.useState<string>('');
     const isProgrammaticSeek = useRef(false);
+    const isProgrammaticPlay = useRef(false);
 
     useEffect(() => {
         if (seekTime !== undefined && seekTime !== null && activeRef.current) {
             isProgrammaticSeek.current = true;
+            isProgrammaticPlay.current = true;
             activeRef.current.currentTime = seekTime;
             activeRef.current.play().catch(e => console.error("Auto-play failed:", e));
         }
@@ -215,6 +217,14 @@ const VideoUpload: React.FC<VideoUploadProps> = ({ onFileSelected, onTimeUpdate,
                             onTimeUpdate={handleTimeUpdate}
                             onPause={onVideoPause}
                             onEnded={onVideoPause}
+                            onPlay={() => {
+                                if (isProgrammaticPlay.current) {
+                                    isProgrammaticPlay.current = false;
+                                } else {
+                                    // User manually clicked play. Clear the playback usage limit.
+                                    if (onUserSeek) onUserSeek();
+                                }
+                            }}
                             onSeeking={() => {
                                 if (isProgrammaticSeek.current) {
                                     isProgrammaticSeek.current = false;

@@ -6,11 +6,12 @@ interface SidebarProps {
     disabled?: boolean;
     onOpenLog?: () => void;
     onRepairEnv?: () => void;
+    onOpenModels?: () => void;
     hasMissingDeps?: boolean;
     themeMode?: 'light' | 'dark' | 'gradient'; // 'gradient' is actually our light mode now
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disabled, onOpenLog, onRepairEnv, hasMissingDeps, themeMode }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disabled, onOpenLog, onRepairEnv, onOpenModels, hasMissingDeps, themeMode }) => {
     const [isHovered, setIsHovered] = useState(false);
     const isLightMode = themeMode === 'gradient'; // 'gradient' is the new Light Mode key
 
@@ -18,6 +19,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disab
         { id: 'whisperx', name: '本地识别 (WhisperX)', icon: '💻' },
         { id: 'jianying', name: '刷个大火箭', icon: '🎬' },
         { id: 'bcut', name: '揣着硬币瞎晃悠', icon: '📺' },
+    ];
+
+    const configServices = [
+        { id: 'strategy', name: '音画同步策略 ', icon: '🏃' },
+        { id: 'tts', name: 'TTS 配置', icon: '🗣️' },
     ];
 
     return (
@@ -128,6 +134,51 @@ const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disab
                         </span>
                     </button>
                 ))}
+
+                <div style={{ margin: '10px 20px', borderBottom: isLightMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.1)' }}></div>
+
+                {configServices.map((service) => (
+                    <button
+                        key={service.id}
+                        onClick={() => !disabled && onServiceChange(service.id)}
+                        disabled={disabled}
+                        title={!isHovered ? service.name : ''}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            paddingLeft: '24px',
+                            paddingRight: '12px',
+                            paddingTop: '12px',
+                            paddingBottom: '12px',
+                            border: 'none',
+                            borderLeft: activeService === service.id ? '4px solid var(--accent-color)' : '4px solid transparent',
+                            background: activeService === service.id ? 'linear-gradient(90deg, rgba(99, 102, 241, 0.2), transparent)' : 'transparent',
+                            color: activeService === service.id ? (isLightMode ? '#7c3aed' : '#fff') : (isLightMode ? '#475569' : '#cbd5e1'),
+                            cursor: disabled ? 'not-allowed' : 'pointer',
+                            textAlign: 'left',
+                            transition: 'all 0.2s ease',
+                            outline: 'none',
+                            fontSize: '0.95em',
+                            width: '100%',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            position: 'relative'
+                        }}
+                        onMouseEnter={(e) => {
+                            if (!disabled && activeService !== service.id) {
+                                e.currentTarget.style.background = isLightMode ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.05)';
+                            }
+                        }}
+                        onMouseLeave={(e) => {
+                            if (!disabled && activeService !== service.id) {
+                                e.currentTarget.style.background = 'transparent';
+                            }
+                        }}
+                    >
+                        <span style={{ fontSize: '1.5em', marginRight: '15px', flexShrink: 0 }}>{service.icon}</span>
+                        <span style={{ opacity: isHovered ? 1 : 0, transition: 'opacity 0.2s', width: isHovered ? 'auto' : 0, marginLeft: '12px', display: 'inline-block' }}>{service.name}</span>
+                    </button>
+                ))}
             </div>
 
             {/* Bottom Section: Utilities */}
@@ -140,6 +191,53 @@ const Sidebar: React.FC<SidebarProps> = ({ activeService, onServiceChange, disab
                 flexDirection: 'column',
                 gap: '5px'
             }}>
+                <button
+                    onClick={onOpenModels}
+                    title={!isHovered ? "模型管理中心" : ""}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        paddingLeft: '24px',
+                        paddingRight: '12px',
+                        paddingTop: '12px',
+                        paddingBottom: '12px',
+                        border: 'none',
+                        borderLeft: activeService === 'models' ? '4px solid var(--accent-color)' : '4px solid transparent',
+                        background: activeService === 'models' ? 'linear-gradient(90deg, rgba(99, 102, 241, 0.2), transparent)' : 'transparent',
+                        color: activeService === 'models' ? (isLightMode ? '#7c3aed' : '#fff') : (isLightMode ? '#64748b' : '#94a3b8'),
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.2s ease',
+                        outline: 'none',
+                        fontSize: '0.95em',
+                        width: '100%',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        position: 'relative'
+                    }}
+                    onMouseEnter={(e) => {
+                        if (activeService !== 'models') {
+                            e.currentTarget.style.color = isLightMode ? '#1e293b' : '#fff';
+                            e.currentTarget.style.background = isLightMode ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)';
+                        }
+                    }}
+                    onMouseLeave={(e) => {
+                        if (activeService !== 'models') {
+                            e.currentTarget.style.color = isLightMode ? '#64748b' : '#94a3b8';
+                            e.currentTarget.style.background = 'transparent';
+                        }
+                    }}
+                >
+                    <span style={{ fontSize: '1.5em', marginRight: '15px', flexShrink: 0 }}>📦</span>
+                    <span style={{
+                        opacity: isHovered ? 1 : 0,
+                        transition: 'opacity 0.2s',
+                        transitionDelay: isHovered ? '0.1s' : '0s'
+                    }}>
+                        模型管理中心
+                    </span>
+                </button>
+
                 <button
                     onClick={onRepairEnv}
                     title={!isHovered ? "修复运行环境" : ""}

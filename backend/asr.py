@@ -10,6 +10,7 @@ import torch
 import traceback
 import whisperx
 import gc
+import json
 import transformers.modeling_utils
 import transformers.utils.import_utils
 
@@ -24,12 +25,9 @@ from asr_data import ASRData
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Define specific model relative paths
-# 1. Dev/Resources Path: ../models/whisperx/...
 PATH_DEV_1 = os.path.join(BACKEND_DIR, "..", "models", "whisperx", "faster-whisper-large-v3-turbo-ct2")
 PATH_DEV_2 = os.path.join(BACKEND_DIR, "..", "models", "faster-whisper-large-v3-turbo-ct2")
 
-# 2. Prod Root Path: ../../models/whisperx/... (From resources/backend -> resources -> root)
 PATH_PROD_1 = os.path.join(BACKEND_DIR, "..", "..", "models", "whisperx", "faster-whisper-large-v3-turbo-ct2")
 PATH_PROD_2 = os.path.join(BACKEND_DIR, "..", "..", "models", "faster-whisper-large-v3-turbo-ct2")
 
@@ -38,12 +36,10 @@ DEFAULT_MODEL_ID = "large-v3-turbo"
 def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
     new_segments = []
     
-    PUNCTUATION = {'.', '?', '!', '。', '？', '！', '…', '；', ';', ',', '，'}
+    PUNCTUATION = {'?', '!', '。', '？', '！', '…', '；', ';', ',', '，'}
     
     if max_chars is None:
         max_chars = 30
-        
-    PUNCTUATION = {'.', '?', '!', '。', '？', '！', '…', '；', ';', ',', '，'}
 
     def is_content(w_text):
         return w_text.strip() not in PUNCTUATION
@@ -53,9 +49,46 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
         if not words:
             continue
             
-        # SANITIZER: Cap word duration
-        # WhisperX sometimes hallucinates 5s+ duration for the last word.
-        # We cap it to 1.5s max per character/word.
+        for i, w in enumerate(words):
+            if "start" not in w or "end" not in w:
+                # Infer start
+                if i > 0 and "end" in words[i-1]:
+                    s_cand = words[i-1]["end"]
+                else:
+                    s_cand = vad_seg["start"]
+                
+                e_cand = vad_seg["end"]
+                for j in range(i + 1, len(words)):
+                    if "start" in words[j]:
+                        e_cand = words[j]["start"]
+                        break
+                    
+                # Assign with safety checks
+                w["start"] = w.get("start", s_cand)
+                # Respect the hard limit of the next word's start
+                w["end"] = w.get("end", e_cand)
+                
+                
+                limit_end = e_cand
+                nominal_end = w["start"] + 0.3
+                
+                target_end = min(nominal_end, limit_end)
+                w["end"] = target_end
+                
+                # Ensure non-zero positive duration (even if it means microscopic overlap or push)
+                if w["end"] <= w["start"]:
+                    w["end"] = w["start"] + 0.05 # Minimal duration for unaligned words in tight gaps
+                    print(f"Squeezed unaligned word '{w.get('word')}' into tight gap: {w['start']:.3f}-{w['end']:.3f}")
+                else:
+                    dur = w["end"] - w["start"]
+                    print(f"Fixed unaligned word '{w.get('word')}' duration: {dur:.2f}s (Limit: {limit_end:.3f})")
+        
+        if i == 0 and len(segments) > 0: 
+             pass
+             
+        pass
+        
+        # 2. Existing Duration Clamp for aligned words
         for w in words:
             if "start" in w and "end" in w:
                 dur = w["end"] - w["start"]
@@ -86,7 +119,8 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
                 next_is_ascii = all(ord(c) < 128 for c in next_w["word"])
                 gap = next_start - curr_end
                 
-                if curr_is_ascii and next_is_ascii and gap < 0.1:
+                # Prevent negative gap (overlap) merging which causes "time travel"
+                if curr_is_ascii and next_is_ascii and 0 <= gap < 0.1:
                     current_merged["word"] += next_w["word"]
                     current_merged["end"] = next_end
                 else:
@@ -98,7 +132,8 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
         current_chunk_words = []
         current_len = 0
         
-        for word in merged_words:
+        for i in range(len(merged_words)):
+            word = merged_words[i]
             w_text = word["word"]
             should_limit_split = False
             is_punct = w_text.strip() in PUNCTUATION
@@ -116,9 +151,15 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
             current_len += len(w_text)
             
             if w_text and w_text[-1] in PUNCTUATION:
-                 seg_chunks.append(current_chunk_words)
-                 current_chunk_words = []
-                 current_len = 0
+                if w_text[-1] == '.':
+                    if i + 1 < len(merged_words):
+                        next_w_text = merged_words[i+1]["word"].strip()
+                        if next_w_text and next_w_text[0].isdigit():
+                            continue
+                             
+                seg_chunks.append(current_chunk_words)
+                current_chunk_words = []
+                current_len = 0
                  
         if current_chunk_words:
             seg_chunks.append(current_chunk_words)
@@ -127,6 +168,7 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
             raw_text = "".join([w["word"] for w in chunk])
             display_text = raw_text.strip()
             for p in PUNCTUATION:
+                if p == '.': continue 
                 display_text = display_text.replace(p, "")
             
             if not display_text:
@@ -173,6 +215,11 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
             if c_end is None: c_end = c_start + 0.1
             if c_end <= c_start:
                  c_end = c_start + 0.1 # Min duration
+            
+            # Max Duration Cap REVERTED per user request (Opting for VAD tuning instead)
+            # max_allowed_dur = len(display_text) * 0.3 + 3.0
+            # if c_end - c_start > max_allowed_dur:
+            #     c_end = c_start + max_allowed_dur
 
             if idx == len(seg_chunks) - 1:
                 pass 
@@ -208,7 +255,7 @@ def split_into_subtitles(segments, max_chars=35, max_gap=0.5):
 
 
 
-def run_asr(audio_path, model_path=None, service="whisperx"):
+def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None):
     """
     Run ASR using WhisperX or Cloud APIs:
     1. Transcribe (Faster-Whisper generic / Cloud)
@@ -221,7 +268,12 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
         import hashlib
         
         # Create cache directory
-        cache_dir = os.path.join(BACKEND_DIR, ".cache")
+        if output_dir:
+            cache_dir = output_dir
+        else:
+            # Fallback to Project Root .cache (parent of backend)
+            cache_dir = os.path.join(BACKEND_DIR, "..", ".cache")
+            
         os.makedirs(cache_dir, exist_ok=True)
         
         # Generare unique filename based on absolute path
@@ -324,14 +376,7 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
         print(f"Found local model at: {local_model_path}")
         target_model = local_model_path
     else:
-        # CRITICAL CHANGE: If local model not found, and we are in "lazy check" mode,
-        # we must fail here if the model is truly missing, rather than trying to download (if offline).
-        # Check if we should enforce local models.
         print(f"Local model not found. Defaulting to {DEFAULT_MODEL_ID} but checking existence...")
-        # If we are here, it means no local model was found in standard paths.
-        # If the user intends to rely on local models (standard usage), this should fail.
-        
-        # Check if the fallback path exists
         if not os.path.exists(PATH_DEV_1) and not os.path.exists(PATH_PROD_1):
              error_msg = (
                  "Fatal Error: Local WhisperX model not found.\n"
@@ -363,8 +408,8 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
         # Note: 'min_silence_duration_ms' is not supported by whisperx.load_model via kwargs
         # We tune thresholds instead.
         vad_options = {
-            "vad_onset": 0.550,  # Slightly stricter than 0.5
-            "vad_offset": 0.550  # Significantly stricter than 0.363 (cuts silence sooner)
+            "vad_onset": 0.700,  # Stricter than 0.550
+            "vad_offset": 0.700  # Stricter than 0.550 (cuts silence sooner)
         }
         
         model = whisperx.load_model(
@@ -392,6 +437,10 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
             language="zh", 
             task="transcribe"
         )
+        
+        print(f"Transcription complete. Found {len(result['segments'])} segments.")
+        if not result["segments"]:
+             print("[WARNING] Whisper returned 0 segments. This typically means VAD thresholds are too strict or audio is silent.")
         
         print(f"Transcription complete. Detected language: {result['language']}")
         
@@ -434,17 +483,22 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
         
         # --- DEBUG: Save Raw Output (User Request) ---
         try:
-            import json
-            base_name = os.path.splitext(audio_path)[0]
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+                base_name = os.path.splitext(os.path.basename(audio_path))[0]
+                save_prefix = os.path.join(output_dir, base_name)
+            else:
+                base_name = os.path.splitext(audio_path)[0]
+                save_prefix = base_name # Fallback to same folder as audio
             
             # 1. Save JSON (Full Detail)
-            json_path = base_name + "_debug_raw.json"
+            json_path = save_prefix + "_raw.json"
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(aligned_result["segments"], f, ensure_ascii=False, indent=2)
             print(f"Debug: Saved raw JSON to {json_path}")
             
             # 2. Save SRT (Raw Segments)
-            srt_path = base_name + "_debug_raw.srt"
+            srt_path = save_prefix + "_raw.srt"
             def fmt_time(t):
                 hours = int(t // 3600)
                 minutes = int((t % 3600) // 60)
@@ -466,6 +520,10 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
         
         # Cleanup
         del model_a
+        
+        # Cleanup Whisper Model
+        del model
+        
         gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
@@ -474,9 +532,20 @@ def run_asr(audio_path, model_path=None, service="whisperx"):
         # Use existing logic helper
         final_segments = split_into_subtitles(aligned_result["segments"], max_chars=30)
         
+        # --- DEBUG: Save Repaired (Intermediate) ---
+        try:
+             repaired_json_path = save_prefix + "_debug_repaired.json"
+             with open(repaired_json_path, "w", encoding="utf-8") as f:
+                 json.dump(aligned_result["segments"], f, ensure_ascii=False, indent=2)
+             print(f"Debug: Saved repaired JSON to {repaired_json_path}")
+        except Exception as e:
+             print(f"Warning: Failed to save repaired debug info: {e}")
+        # -------------------------------------------
+
+
         # --- DEBUG: Save Final Output (Corrected) ---
         try:
-            final_json_path = base_name + "_debug_final.json"
+            final_json_path = save_prefix + "_debug_final.json"
             with open(final_json_path, "w", encoding="utf-8") as f:
                 json.dump(final_segments, f, ensure_ascii=False, indent=2)
             print(f"Debug: Saved FINAL JSON to {final_json_path}")

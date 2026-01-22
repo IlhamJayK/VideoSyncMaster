@@ -536,13 +536,14 @@ class IndexTTS2:
             print(*segments, sep="\n")
         do_sample = generation_kwargs.pop("do_sample", True)
         top_p = generation_kwargs.pop("top_p", 0.8)
-        top_k = generation_kwargs.pop("top_k", 30)
-        temperature = generation_kwargs.pop("temperature", 0.8)
+        top_k = generation_kwargs.pop("top_k", 5)
+        temperature = generation_kwargs.pop("temperature", 0.7)
         autoregressive_batch_size = 1
         length_penalty = generation_kwargs.pop("length_penalty", 0.0)
         num_beams = generation_kwargs.pop("num_beams", 3)
-        repetition_penalty = generation_kwargs.pop("repetition_penalty", 10.0)
+        repetition_penalty = generation_kwargs.pop("repetition_penalty", 1.0)
         max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1500)
+        inference_cfg_rate = generation_kwargs.pop("inference_cfg_rate", 0.7)
         sampling_rate = 22050
 
         wavs = []
@@ -654,7 +655,7 @@ class IndexTTS2:
                 with torch.amp.autocast(text_tokens.device.type, enabled=dtype is not None, dtype=dtype):
                     m_start_time = time.perf_counter()
                     diffusion_steps = 25
-                    inference_cfg_rate = 0.7
+                    # inference_cfg_rate popped earlier
                     latent = self.s2mel.models['gpt_layer'](latent)
                     S_infer = self.semantic_codec.quantizer.vq2emb(codes.unsqueeze(1))
                     S_infer = S_infer.transpose(1, 2)

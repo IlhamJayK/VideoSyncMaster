@@ -32,7 +32,7 @@ else:
     
 DEFAULT_CONFIG_PATH = os.path.join(DEFAULT_MODEL_DIR, "config.yaml")
 
-def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None, language="English"):
+def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None, language="English", **kwargs):
     """
     Run Voice Cloning TTS.
     :param text: Text to speak.
@@ -53,26 +53,6 @@ def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None,
         
     print(f"Initializing IndexTTS2 from {model_dir}...")
     
-    # Prepend language tag
-    # Prepend language tag (DISABLED per user request: model doesn't support tags)
-    # lang_map = {
-    #     "Chinese": "<|zh|>",
-    #     "English": "<|en|>",
-    #     "Japanese": "<|jp|>",
-    #     "Korean": "<|ko|>",
-    #     "zh": "<|zh|>",
-    #     "en": "<|en|>",
-    #     "ja": "<|jp|>",
-    #     "jp": "<|jp|>",
-    #     "ko": "<|ko|>",
-    # }
-    # tag = lang_map.get(language, "<|en|>") # Default to english if unknown
-    
-    # If text already starts with a tag, don't double add? 
-    # Actually, user input won't have it.
-    # But just in case text came from somewhere else.
-    # if not text.startswith("<|"):
-    #     text = tag + " " + text
     
     print(f"TTS Text with tag: {text}")
     
@@ -99,7 +79,8 @@ def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None,
             spk_audio_prompt=ref_audio_path, 
             text=text, 
             output_path=output_path,
-            verbose=True
+            verbose=True,
+            **kwargs
         )
         
         print(f"TTS complete. Saved to {output_path}")
@@ -111,7 +92,7 @@ def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None,
         traceback.print_exc()
         return False
 
-def run_batch_tts(tasks, model_dir=None, config_path=None, language="English"):
+def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", **kwargs):
     """
     Run Batch Voice Cloning TTS.
     :param tasks: List of dicts {text, ref_audio_path, output_path}
@@ -148,24 +129,6 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English"):
             # Use task-specific language or fallback to global default
             task_lang = task.get('language', language)
             
-            # lang_map = {
-            #     "Chinese": "<|zh|>",
-            #     "English": "<|en|>",
-            #     "Japanese": "<|jp|>",
-            #     "Korean": "<|ko|>",
-            #     "zh": "<|zh|>",
-            #     "en": "<|en|>",
-            #     "ja": "<|jp|>",
-            #     "jp": "<|jp|>",
-            #     "ko": "<|ko|>",
-            # }
-            # tag = lang_map.get(task_lang, "<|en|>")
-            # # Fix typo: "<|en|>"
-            # # Also handle potential 'Cantonese' if requested later, but for now strict map.
-            # tag = lang_map.get(task_lang, "<|en|>")
-
-            # if not text.startswith("<|"):
-            #     text = tag + " " + text
 
             print(f"Synthesizing [{i+1}/{total}]: '{text}'")
             
@@ -176,7 +139,8 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English"):
                     spk_audio_prompt=ref, 
                     text=text, 
                     output_path=out,
-                    verbose=False
+                    verbose=False,
+                    **kwargs
                 )
                 
                 # Emit Partial Result for UI to enable playback immediately
