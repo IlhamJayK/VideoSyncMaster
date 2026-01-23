@@ -6,16 +6,9 @@ site_packages = os.path.join(python_dir, "Lib", "site-packages")
 if os.path.exists(site_packages) and site_packages not in sys.path:
     sys.path.insert(0, site_packages)
 
-import torch
-import traceback
-import whisperx
-import gc
+# Lazy Imports
 import json
-import transformers.modeling_utils
-import transformers.utils.import_utils
-
-transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
-transformers.modeling_utils.check_torch_load_is_safe = lambda: None
+import traceback
 
 from jianying import JianYingASR
 from bcut import BcutASR
@@ -333,6 +326,22 @@ def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None, va
     
     # Default: WhisperX
     
+    # WhisperX Service (Lazy Import)
+    try:
+        import torch
+        import whisperx
+        import gc
+        import transformers.modeling_utils
+        import transformers.utils.import_utils
+        
+        # Patch transformers to avoid some pickling issues with offline mode
+        transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
+        transformers.modeling_utils.check_torch_load_is_safe = lambda: None
+        
+    except ImportError as e:
+        print(f"Failed to import WhisperX dependencies: {e}")
+        return []
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
     batch_size = 4 

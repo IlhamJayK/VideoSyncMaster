@@ -4,31 +4,26 @@ import argparse
 import torch
 import pathlib
 
+# [USER REQUEST] Force Offline for manual handling of models
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ["PYTHONUTF8"] = "1"
+
 # Force UTF-8 for stdout/stderr
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
-# Redirect stdout to capture noise? No, better to patch print.
-# But libraries might write to C-level stdout.
-# We will use markers __JSON_START__ to help frontend parse.
-# And we ensure our prints go to flush=True.
 
 import subprocess
 
-# Ensure current directory is in sys.path so pyarmor_runtime can be found
 current_script_dir = os.path.dirname(os.path.abspath(__file__))
 if current_script_dir not in sys.path:
     sys.path.insert(0, current_script_dir)
 
-# --- LOGGING & ENVIRONMENT SETUP ---
-# Determine Environment (Dev vs Prod)
-# Prod structure: App/resources/backend/main.py (Folder 'resources' is parent of backend)
-# Dev structure: Project/backend/main.py
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR_NAME = os.path.basename(os.path.dirname(CURRENT_DIR))
 
 if PARENT_DIR_NAME.lower() == 'resources':
-    # Production / Packaged
     IS_PROD = True
     APP_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 else:
@@ -205,44 +200,92 @@ if os.path.exists(os.path.join(ffmpeg_bin, "ffmpeg.exe")):
 else:
     print("Portable FFmpeg not found, using system PATH.")
 
-# --- GPU / DLL PATH FIX ---
-# Add PyTorch and NVIDIA cuDNN directories to PATH so ctranslate2/whisperx can find them
-try:
-    import torch
-    import pathlib
+def setup_gpu_paths():
+    """
+    Add PyTorch and NVIDIA cuDNN directories to PATH so ctranslate2/whisperx can find them.
+    Lazy loaded to prevent startup hangs.
+    """
+    try:
+        debug_log("Setting up GPU paths...")
+        import torch
+        import pathlib
+        
+        # 1. Add torch/lib (often contains bundled cuDNN v9, but also dependencies)
+        torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
+        if os.path.exists(torch_lib):
+             os.environ["PATH"] = torch_lib + os.pathsep + os.environ["PATH"]
+             # print(f"[DEBUG] Added torch lib to PATH: {torch_lib}")
     
-    # 1. Add torch/lib (often contains bundled cuDNN v9, but also dependencies)
-    torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
-    if os.path.exists(torch_lib):
-         os.environ["PATH"] = torch_lib + os.pathsep + os.environ["PATH"]
-         # print(f"[DEBUG] Added torch lib to PATH: {torch_lib}")
+        # 2. Add nvidia-cudnn (v8) from site-packages if installed
+        # Expected path: .../Lib/site-packages/nvidia/cudnn/bin
+        site_packages = os.path.dirname(os.path.dirname(torch.__file__)) # torch is in site-packages
+        cudnn_bin = os.path.join(site_packages, "nvidia", "cudnn", "bin")
+        if os.path.exists(cudnn_bin):
+            os.environ["PATH"] = cudnn_bin + os.pathsep + os.environ["PATH"]
+            print(f"[DEBUG] Added nvidia-cudnn v8 bin to PATH: {cudnn_bin}")
+        else:
+            # Fallback: Check local python Lib if not resolved above
+            if not getattr(sys, 'frozen', False):
+                 # Try relative to current script for dev env
+                 dev_cudnn = os.path.join(os.path.dirname(site_packages), "nvidia", "cudnn", "bin")
+                 if os.path.exists(dev_cudnn):
+                     os.environ["PATH"] = dev_cudnn + os.pathsep + os.environ["PATH"]
+    
+    except Exception as e:
+        print(f"[WARNING] Failed to patch DLL paths: {e}")
 
-    # 2. Add nvidia-cudnn (v8) from site-packages if installed
-    # Expected path: .../Lib/site-packages/nvidia/cudnn/bin
-    site_packages = os.path.dirname(os.path.dirname(torch.__file__)) # torch is in site-packages
-    cudnn_bin = os.path.join(site_packages, "nvidia", "cudnn", "bin")
-    if os.path.exists(cudnn_bin):
-        os.environ["PATH"] = cudnn_bin + os.pathsep + os.environ["PATH"]
-        print(f"[DEBUG] Added nvidia-cudnn v8 bin to PATH: {cudnn_bin}")
-    else:
-        # Fallback: Check local python Lib if not resolved above
-        if not getattr(sys, 'frozen', False):
-             # Try relative to current script for dev env
-             dev_cudnn = os.path.join(os.path.dirname(site_packages), "nvidia", "cudnn", "bin")
-             if os.path.exists(dev_cudnn):
-                 os.environ["PATH"] = dev_cudnn + os.pathsep + os.environ["PATH"]
 
-except Exception as e:
-    print(f"[WARNING] Failed to patch DLL paths: {e}")
-# ---------------------------
-
+# 238: 
+# Lazy Imports moved to functions or after dependency checks
 from asr import run_asr
-from tts import run_tts, run_batch_tts
 from alignment import align_audio, merge_audios_to_video, get_audio_duration
 from llm import LLMTranslator
 import ffmpeg
 import json
 import shutil
+from dependency_manager import ensure_transformers_version, check_gpu_deps
+
+# Global TTS entry points (lazy loaded)
+_run_tts = None
+_run_batch_tts = None
+
+def get_tts_runner(service="indextts", check_deps=True):
+    global _run_tts, _run_batch_tts
+    
+    # Dependency Check
+    if check_deps:
+        if service == "qwen":
+            print("[Main] Ensuring dependencies for Qwen3-TTS...")
+            setup_gpu_paths()
+            if ensure_transformers_version("4.57.3"):
+                 check_gpu_deps()
+                 print("[Main] Qwen3 dependencies ready.")
+            else:
+                 print("[Main] Failed to setup Qwen3 dependencies.")
+                 return None, None
+        else:
+            # Default/IndexTTS
+            print("[Main] Ensuring dependencies for IndexTTS...")
+            if ensure_transformers_version("4.52.1"):
+                 print("[Main] IndexTTS dependencies ready.")
+            else:
+                 print("[Main] Failed to setup IndexTTS dependencies.")
+                 return None, None
+    
+    # Import
+    try:
+        if service == "qwen":
+            # Assume we will implement qwen_tts_service
+            from qwen_tts_service import run_qwen_tts, run_batch_qwen_tts
+            return run_qwen_tts, run_batch_qwen_tts
+        else:
+            from tts import run_tts, run_batch_tts
+            return run_tts, run_batch_tts
+    except ImportError as e:
+        print(f"[Main] Failed to import TTS service {service}: {e}")
+        return None, None
+
+
 
 def analyze_video(file_path):
     try:
@@ -330,13 +373,19 @@ def translate_text(input_text_or_json, target_lang):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_onset=0.700, vad_offset=0.700, **kwargs):
-    print(f"Starting AI Dubbing for {input_path} -> {target_lang} using {asr_service}", flush=True)
+
+# 333: 
+def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_onset=0.700, vad_offset=0.700, tts_service="indextts", **kwargs):
+    print(f"Starting AI Dubbing for {input_path} -> {target_lang} using ASR:{asr_service} TTS:{tts_service}", flush=True)
     
+    # 0. Get TTS Runner (This will switch deps if needed)
+    run_tts_func, _ = get_tts_runner(tts_service)
+    if not run_tts_func:
+        return {"success": False, "error": f"Failed to initialize TTS service: {tts_service}"}
+
     # 1. Initialize LLM
     translator = LLMTranslator()
     
-    # 2. Run ASR
     # 2. Run ASR
     print("Step 1/4: Running ASR...", flush=True)
     
@@ -400,7 +449,7 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
     translator.cleanup()
     del translator
     
-    print(f"Step 3: Cloning Voice for {len(tts_tasks)} segments...", flush=True)
+    print(f"Step 3: Cloning Voice for {len(tts_tasks)} segments using {tts_service}...", flush=True)
     
     for item in tts_tasks:
         idx = item['idx']
@@ -422,7 +471,8 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
 
         # C. TTS
         tts_output_path = os.path.join(segments_dir, f"tts_{idx}.wav")
-        success = run_tts(translated_text, ref_clip_path, tts_output_path, language=target_lang, **kwargs)
+        # Call the dynamic runner
+        success = run_tts_func(translated_text, ref_clip_path, tts_output_path, language=target_lang, **kwargs)
         
         if success:
                 
@@ -480,6 +530,7 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
         return {"success": False, "error": "Merging failed."}
 
 
+
 def main():
     parser = argparse.ArgumentParser(description="VideoSync Backend")
     parser.add_argument("--action", type=str, help="Action to perform: asr, tts, align, merge_video", default="test_asr")
@@ -503,6 +554,13 @@ def main():
     parser.add_argument("--output_dir", type=str, help="Output directory for debug/intermediate files")
     parser.add_argument("--vad_onset", type=float, help="VAD onset threshold", default=0.700)
     parser.add_argument("--vad_offset", type=float, help="VAD offset threshold", default=0.700)
+    parser.add_argument("--tts_service", type=str, help="TTS Service: indextts or qwen", default="indextts")
+    parser.add_argument("--qwen_mode", type=str, help="Qwen TTS Mode: clone, design, preset", default="clone")
+    parser.add_argument("--voice_instruct", type=str, help="Voice Design Instruction", default="")
+    parser.add_argument("--preset_voice", type=str, help="Preset Voice for Qwen3", default="Vivian")
+    parser.add_argument("--qwen_model_size", type=str, help="Qwen Model Size: 1.7B or 0.6B", default="1.7B")
+    parser.add_argument("--qwen_ref_text", type=str, help="Reference text for Qwen Clone mode", default="")
+    parser.add_argument("--batch_size", type=int, help="Batch Size for TTS", default=1)
     args = parser.parse_args()
 
     tts_kwargs = {
@@ -510,7 +568,12 @@ def main():
         "top_p": args.top_p,
         "top_k": args.top_k,
         "repetition_penalty": args.repetition_penalty,
-        "inference_cfg_rate": args.cfg_scale
+        "inference_cfg_rate": args.cfg_scale,
+        "qwen_mode": args.qwen_mode,
+        "voice_instruct": args.voice_instruct,
+        "preset_voice": args.preset_voice,
+        "qwen_model_size": args.qwen_model_size,
+        "qwen_ref_text": args.qwen_ref_text
     }
 
     result_data = None
@@ -531,13 +594,32 @@ def main():
             
     elif args.action == "test_tts":
          # ... (keep existing) ...
-        if args.input and args.ref and args.output:
+        # Dynamic Dispatch
+        tts_service_name = getattr(args, 'tts_service', 'indextts')
+        run_tts_func, _ = get_tts_runner(tts_service_name)
+        
+        if not run_tts_func:
+             print(f"Error: Failed to init TTS service {tts_service_name}")
+        elif args.input and args.output: # Ref optional for Qwen Design
             if not args.json:
-                print(f"Testing TTS.")
+                print(f"Testing TTS ({tts_service_name}).")
+            
             target_lang = args.lang if args.lang else "English"
-            success = run_tts(args.input, args.ref, args.output, language=target_lang, **tts_kwargs)
-            if args.json:
-                result_data = {"success": success, "output": args.output}
+            ref_audio = args.ref if args.ref else None
+            
+            # Prepare kwargs
+            runtime_kwargs = tts_kwargs.copy()
+            if hasattr(args, 'qwen_mode'): runtime_kwargs['qwen_mode'] = args.qwen_mode
+            if hasattr(args, 'voice_instruct'): runtime_kwargs['voice_instruct'] = args.voice_instruct
+            
+            try:
+                success = run_tts_func(args.input, ref_audio, args.output, language=target_lang, **runtime_kwargs)
+                if args.json:
+                    result_data = {"success": success, "output": args.output}
+            except Exception as e:
+                print(f"Error: {e}")
+                if args.json: result_data = {"success": False, "error": str(e)}
+
         else:
             print("Usage: --action test_tts --input 'Text' --ref 'ref.wav' --output 'out.wav' --lang 'Japanese'")
             
@@ -637,10 +719,27 @@ def main():
         else:
             print("Usage: --action dub_video --input video.mp4 --output dubbed.mp4 --lang 'Chinese'")
     
+
+# 640:
     elif args.action == "generate_single_tts":
         # Generate TTS for a single segment
         # Requires: --input (video), --output (segment audio path), --text (text to speak), --start, --duration, --lang
-        if args.input and args.output:
+        
+        # Determine TTS Service
+        tts_service_name = getattr(args, 'tts_service', 'indextts')
+        run_tts_func, _ = get_tts_runner(tts_service_name)
+        if not run_tts_func:
+             result_data = {"success": False, "error": f"Failed to init TTS: {tts_service_name}"}
+             if not args.json: print(result_data)
+             # Early exit logic requires handling main's structure. 
+             # We will just print JSON at end, so set result_data.
+        
+        if args.input == 'dummy':
+             if args.json:
+                 print(json.dumps({"success": True, "message": "Service initialized"}))
+             return
+
+        elif args.input and args.output:
             try:
                 video_path = args.input
                 output_audio = args.output
@@ -682,7 +781,7 @@ def main():
                         result_data = {"success": False, "error": "No text provided"}
                     else:
                         # 3. Generate TTS
-                        success = run_tts(translated_text, ref_clip_path, output_audio, language=target_lang, **tts_kwargs)
+                        success = run_tts_func(translated_text, ref_clip_path, output_audio, language=target_lang, **tts_kwargs)
                         
                         # 4. Cleanup ref
                         try:
@@ -736,7 +835,13 @@ def main():
             print("Usage: --action translate_text --input 'Text or JSON' --lang 'Chinese'")
 
     elif args.action == "generate_batch_tts":
-        if args.input and args.ref:
+        # Determine TTS Service
+        tts_service_name = getattr(args, 'tts_service', 'indextts')
+        _, run_batch_tts_func = get_tts_runner(tts_service_name)
+        if not run_batch_tts_func:
+             result_data = {"success": False, "error": f"Failed to init Batch TTS: {tts_service_name}"}
+        
+        elif args.input and args.ref:
             try:
                 video_path = args.input
                 json_path = args.ref # Path to temporary json file containing segments
@@ -744,7 +849,7 @@ def main():
                 with open(json_path, 'r', encoding='utf-8') as f:
                     segments = json.load(f)
                 
-                print(f"Batch generating TTS for {len(segments)} segments...")
+                print(f"Batch generating TTS for {len(segments)} segments using {tts_service_name}...")
 
                 tasks = []
 
@@ -795,9 +900,13 @@ def main():
                 # Actually, `generate_batch_tts` didn't have a --lang arg in `main` parser explicitly checked above, 
                 # but `args.lang` defaults to "English".
                 target_lang = args.lang if args.lang else "English"
-                batch_results = run_batch_tts(tasks, language=target_lang, **tts_kwargs) 
+                
+                # Check args of dynamic batch runner. Assume compatible sig.
+                batch_size = args.batch_size if args.batch_size else 1
+                batch_results = run_batch_tts_func(tasks, language=target_lang, batch_size=batch_size, **tts_kwargs) 
                 
                 # 3. Cleanup Refs & Format Result
+
                 final_results = []
                 for i, res in enumerate(batch_results):
                     task = tasks[i]
@@ -889,6 +998,8 @@ def main():
     try:
         if args.action == 'asr':
             debug_log(f"Running ASR on: {args.input}")
+            # Setup GPU environment lazily
+            setup_gpu_paths()
             # Pass output_dir if provided
             result_data = run_asr(args.input, args.model, service=args.asr, output_dir=args.output_dir)
         elif args.action == 'translate_text':

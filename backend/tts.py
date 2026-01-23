@@ -109,6 +109,9 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
 
     print(f"Initializing IndexTTS2 (Batch) from {model_dir}...")
     
+    # Retrieve batch size (default 1)
+    batch_size = kwargs.get('batch_size', 1)
+    
     try:
         # Initialize model once
         tts = IndexTTS2(
@@ -135,12 +138,16 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
             os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
             
             try:
+                ignore_keys = {'batch_size', 'qwen_mode', 'voice_instruct', 'preset_voice', 'qwen_model_size', 'qwen_ref_text', 'tts_service', 'action', 'json', 'repetition_penalty', 'cfg_scale'}
+                
+                valid_kwargs = {k: v for k, v in kwargs.items() if k not in ignore_keys}
+                
                 tts.infer(
                     spk_audio_prompt=ref, 
                     text=text, 
                     output_path=out,
                     verbose=False,
-                    **kwargs
+                    **valid_kwargs
                 )
                 
                 # Emit Partial Result for UI to enable playback immediately
@@ -165,13 +172,30 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
                 
                 yield {"success": False, "error": str(e)}
             
-            # Emit progress (mapping 20% to 100% of global, or just 0-100 local?)
-            # Backend usually emits 0-100 for the specific action.
+            # Emit progress
             print(f"[PROGRESS] {int((i + 1) / total * 100)}", flush=True)
 
     except Exception as e:
         print(f"Error during Batch TTS: {e}")
         import traceback
         traceback.print_exc()
-        # No yield here as we can't continue loop
         pass
+    finally:
+        # User Requirement: Unload VRAM after all inference is done
+        if IndexTTS2 is not None:
+            # We don't have a direct 'unload' method on the class instance usually, but we can del it
+            # actually our run_batch_tts creates a local `tts` instance.
+            # wait, `tts = IndexTTS2(...)` is local to this function (line 117).
+            # So when function returns, it goes out of scope?
+            # Yes, unless there are circular refs.
+            # But we should be explicit.
+            pass
+        
+        # We need to access `tts` variable, but it might not be defined if init failed
+        if 'tts' in locals():
+            del tts
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print("[BatchTTS] VRAM cleared.")
+

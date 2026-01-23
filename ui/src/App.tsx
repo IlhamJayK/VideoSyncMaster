@@ -33,6 +33,8 @@ function App() {
   const [playUntilTime, setPlayUntilTime] = useState<number | null>(null);
   const [progress, setProgress] = useState(0);
   const [isIndeterminate, setIsIndeterminate] = useState(false);
+  const [installingDeps, setInstallingDeps] = useState(false);
+  const [depsPackageName, setDepsPackageName] = useState('');
   const [translatedSegments, setTranslatedSegments] = useState<Segment[]>([])
   const [targetLang, setTargetLang] = useState(() => localStorage.getItem('targetLang') || 'English')
   const [mergedVideoPath, setMergedVideoPath] = useState<string>('')
@@ -40,12 +42,15 @@ function App() {
   const translationRef = useRef<HTMLDivElement>(null);
   const isScrollingRef = useRef<null | 'timeline' | 'translation'>(null);
   const [leftWidth, setLeftWidth] = useState(() => parseInt(localStorage.getItem('leftWidth') || '400'));
+  const [activeQwenMode, setActiveQwenMode] = useState<'clone' | 'design' | 'preset'>(() => (localStorage.getItem('qwen_mode') as any) || 'clone');
   const [timelineWidth, setTimelineWidth] = useState(() => parseInt(localStorage.getItem('timelineWidth') || '500'));
   const [dragTarget, setDragTarget] = useState<'left' | 'middle' | null>(null);
   const [asrService, setAsrService] = useState(() => localStorage.getItem('asrService') || 'whisperx');
   const [missingDeps, setMissingDeps] = useState<string[]>([]);
   const [currentView, setCurrentView] = useState<'home' | 'models' | 'strategy' | 'tts' | 'whisper'>(() => (localStorage.getItem('currentView') as any) || 'home');
   const [mergeVersion, setMergeVersion] = useState(0);
+  const [ttsService, setTtsService] = useState<'indextts' | 'qwen'>(() => (localStorage.getItem('ttsService') as any) || 'indextts');
+  const [batchSize, setBatchSize] = useState(() => parseInt(localStorage.getItem('batchSize') || '1'));
 
   useEffect(() => {
     const checkEnv = async () => {
@@ -68,9 +73,11 @@ function App() {
   // Persistence for Settings
   useEffect(() => { localStorage.setItem('targetLang', targetLang); }, [targetLang]);
   useEffect(() => { localStorage.setItem('asrService', asrService); }, [asrService]);
+  useEffect(() => { localStorage.setItem('ttsService', ttsService); }, [ttsService]);
   useEffect(() => { localStorage.setItem('leftWidth', leftWidth.toString()); }, [leftWidth]);
   useEffect(() => { localStorage.setItem('timelineWidth', timelineWidth.toString()); }, [timelineWidth]);
   useEffect(() => { localStorage.setItem('currentView', currentView); }, [currentView]);
+  useEffect(() => { localStorage.setItem('batchSize', batchSize.toString()); }, [batchSize]);
 
   useEffect(() => {
     const validateLayout = () => {
@@ -196,14 +203,28 @@ function App() {
       }
     };
 
+    const handleDepsInstalling = (_event: any, pkgName: string) => {
+      setInstallingDeps(true);
+      setDepsPackageName(pkgName);
+    };
+
+    const handleDepsDone = () => {
+      setInstallingDeps(false);
+      setDepsPackageName('');
+    };
+
     (window as any).ipcRenderer.on('backend-progress', handleProgress);
     (window as any).ipcRenderer.on('backend-partial-result', handlePartialResult);
+    (window as any).ipcRenderer.on('backend-deps-installing', handleDepsInstalling);
+    (window as any).ipcRenderer.on('backend-deps-done', handleDepsDone);
 
     return () => {
       const ipc = (window as any).ipcRenderer;
       if (ipc.off) {
         ipc.off('backend-progress', handleProgress);
         ipc.off('backend-partial-result', handlePartialResult);
+        ipc.off('backend-deps-installing', handleDepsInstalling);
+        ipc.off('backend-deps-done', handleDepsDone);
       }
     };
   }, []);
@@ -458,6 +479,32 @@ function App() {
       const ttsCfg = localStorage.getItem('tts_cfg_scale') || '0.7';
       const ttsRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
 
+      const qwenMode = localStorage.getItem('qwen_mode') || 'clone';
+      const qwenInstruct = localStorage.getItem('qwen_voice_instruction') || '';
+      const qwenLang = localStorage.getItem('qwen_language');
+      const qwenModelSize = localStorage.getItem('qwen_model_size') || '1.7B';
+
+      // Design then Clone Workflow
+      const qwenDesignRef = localStorage.getItem('qwen_design_ref_audio');
+      const qwenDesignText = localStorage.getItem('qwen_design_ref_text');
+
+      let effectiveQwenMode = qwenMode;
+      let qwenRefAudio = localStorage.getItem('qwen_ref_audio_path');
+      let qwenRefText = '';
+
+      if (ttsService === 'qwen' && qwenMode === 'design' && qwenDesignRef) {
+        effectiveQwenMode = 'clone';
+        qwenRefAudio = qwenDesignRef;
+        qwenRefText = qwenDesignText || '';
+        console.log('[QwenBoost] Using designed voice for cloning:', qwenRefAudio);
+      }
+
+      // Determine effective language: Qwen Override > Target Lang
+      let effectiveLang = targetLang;
+      if (ttsService === 'qwen' && qwenLang && qwenLang !== 'Auto') {
+        effectiveLang = qwenLang;
+      }
+
       const args = [
         '--action', 'generate_single_tts',
         '--input', originalVideoPath,
@@ -465,18 +512,31 @@ function App() {
         '--text', seg.text,
         '--start', seg.start.toString(),
         '--duration', (seg.end - seg.start).toString(),
-        '--lang', targetLang,
+        '--lang', effectiveLang,
         '--temperature', ttsTemp,
         '--top_p', ttsTopP,
         '--repetition_penalty', ttsRepPen,
         '--cfg_scale', ttsCfg,
         '--strategy', localStorage.getItem('compensation_strategy') || 'auto_speedup',
+        '--tts_service', ttsService,
         '--json'
       ];
 
-      if (ttsRefAudio) {
-        args.push('--ref_audio', ttsRefAudio);
+      if (ttsService === 'qwen') {
+        if (qwenRefAudio) args.push('--ref_audio', qwenRefAudio);
+        if (qwenRefText) args.push('--qwen_ref_text', qwenRefText);
+
+        args.push('--qwen_mode', effectiveQwenMode);
+        args.push('--qwen_model_size', qwenModelSize);
+        if (effectiveQwenMode === 'design' && qwenInstruct) {
+          args.push('--voice_instruct', qwenInstruct);
+        }
+      } else {
+        // IndexTTS fallback for explicit ref
+        if (ttsRefAudio) args.push('--ref_audio', ttsRefAudio);
       }
+
+
 
       const result = await (window as any).ipcRenderer.invoke('run-backend', args);
 
@@ -543,21 +603,60 @@ function App() {
       const ttsCfg = localStorage.getItem('tts_cfg_scale') || '0.7';
       const ttsRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
 
+      const qwenMode = localStorage.getItem('qwen_mode') || 'clone';
+      const qwenInstruct = localStorage.getItem('qwen_voice_instruction') || '';
+      const qwenLang = localStorage.getItem('qwen_language');
+      const qwenModelSize = localStorage.getItem('qwen_model_size') || '1.7B';
+
+      // Design then Clone Workflow
+      const qwenDesignRef = localStorage.getItem('qwen_design_ref_audio');
+      const qwenDesignText = localStorage.getItem('qwen_design_ref_text');
+
+      let effectiveQwenMode = qwenMode;
+      let qwenRefAudio = localStorage.getItem('qwen_ref_audio_path');
+      let qwenRefText = '';
+
+      if (ttsService === 'qwen' && qwenMode === 'design' && qwenDesignRef) {
+        effectiveQwenMode = 'clone';
+        qwenRefAudio = qwenDesignRef;
+        qwenRefText = qwenDesignText || '';
+        console.log('[QwenBoost] Using designed voice for batch cloning:', qwenRefAudio);
+      }
+
+      let effectiveLang = targetLang;
+      if (ttsService === 'qwen' && qwenLang && qwenLang !== 'Auto') {
+        effectiveLang = qwenLang;
+      }
+
       const args = [
         '--action', 'generate_batch_tts',
         '--input', originalVideoPath,
         '--ref', tempJsonPath,
+        '--lang', effectiveLang,
         '--temperature', ttsTemp,
         '--top_p', ttsTopP,
         '--repetition_penalty', ttsRepPen,
         '--cfg_scale', ttsCfg,
         '--strategy', localStorage.getItem('compensation_strategy') || 'auto_speedup', // Pass strategy
+        '--tts_service', ttsService,
+        '--batch_size', batchSize.toString(),
         '--json'
       ];
 
-      if (ttsRefAudio) {
-        args.push('--ref_audio', ttsRefAudio);
+      if (ttsService === 'qwen') {
+        if (qwenRefAudio) args.push('--ref_audio', qwenRefAudio);
+        if (qwenRefText) args.push('--qwen_ref_text', qwenRefText);
+
+        args.push('--qwen_mode', effectiveQwenMode);
+        args.push('--qwen_model_size', qwenModelSize);
+        if (effectiveQwenMode === 'design' && qwenInstruct) {
+          args.push('--voice_instruct', qwenInstruct);
+        }
+      } else {
+        if (ttsRefAudio) args.push('--ref_audio', ttsRefAudio);
       }
+
+
 
       const result = await (window as any).ipcRenderer.invoke('run-backend', args);
 
@@ -657,7 +756,6 @@ function App() {
       const filename = originalVideoPath.split(/[\\/]/).pop() || "video.mp4";
       const filenameNoExt = filename.replace(/\.[^/.]+$/, "");
       const outputPath = `${paths.outputDir}\\${filenameNoExt}\\${filenameNoExt}_dubbed_${targetLang}.mp4`;
-      const segmentsDir = `${paths.outputDir}\\${filenameNoExt}`;
       const cacheDir = `${projectRoot}\\.cache\\${filenameNoExt}`;
 
       // Ensure cache dir exists
@@ -682,14 +780,33 @@ function App() {
       // Read Compensation Strategy
       const strategy = localStorage.getItem('compensation_strategy') || 'auto_speedup';
 
-      // Call merge_video
-      const result = await (window as any).ipcRenderer.invoke('run-backend', [
+      const qwenMode = localStorage.getItem('qwen_mode') || 'clone';
+      const qwenInstruct = localStorage.getItem('qwen_voice_instruction') || '';
+
+      const args = [
         '--action', 'merge_video',
         '--input', originalVideoPath,
         '--ref', jsonPath,
         '--output', outputPath,
-        '--strategy', strategy
-      ]);
+        '--strategy', strategy,
+        '--tts_service', ttsService
+      ];
+
+      if (ttsService === 'qwen') {
+        const explicitRef = localStorage.getItem('qwen_ref_audio_path');
+        if (explicitRef) args.push('--ref_audio', explicitRef);
+
+        args.push('--qwen_mode', qwenMode);
+        if (qwenMode === 'design' && qwenInstruct) {
+          args.push('--voice_instruct', qwenInstruct);
+        }
+      } else {
+        const indexRef = localStorage.getItem('tts_ref_audio_path');
+        if (indexRef) args.push('--ref_audio', indexRef);
+      }
+
+      // Call merge_video
+      const result = await (window as any).ipcRenderer.invoke('run-backend', args);
 
       if (abortRef.current) return false;
 
@@ -1022,7 +1139,12 @@ function App() {
       )}
       {currentView === 'tts' && (
         <div className="glass-panel" style={{ flex: 1, margin: '20px', zIndex: 2, overflow: 'hidden', position: 'relative' }}>
-          <TTSConfig themeMode={bgMode} />
+          <TTSConfig
+            themeMode={bgMode}
+            activeService={ttsService}
+            onServiceChange={setTtsService}
+            onQwenModeChange={setActiveQwenMode}
+          />
         </div>
       )}
       {currentView === 'whisper' && (
@@ -1031,6 +1153,52 @@ function App() {
         </div>
       )}
       <div className="content-wrapper" style={{ display: currentView === 'home' ? 'flex' : 'none', position: 'relative', zIndex: 2, height: '100%', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
+        {/* Active TTS Status Indicator */}
+        <div style={{
+          position: 'absolute',
+          top: '85px',
+          right: '25px',
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '6px 14px',
+          background: 'rgba(255, 255, 255, 0.05)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
+          borderRadius: '20px',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          boxShadow: '0 4px 15px rgba(0,0,0,0.2)',
+          fontSize: '0.85em',
+          pointerEvents: 'auto',
+          userSelect: 'none'
+        }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px #22c55e' }}></span>
+          <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: '500' }}>正在使用:</span>
+          <span style={{ color: '#fff', fontWeight: 'bold' }}>
+            {ttsService === 'qwen' ? (
+              <>Qwen3 ({activeQwenMode === 'clone' ? '声音克隆' : activeQwenMode === 'design' ? '声音设计' : '预置音色'})</>
+            ) : 'Index-TTS'}
+          </span>
+          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.2)', margin: '0 4px' }}></div>
+
+          {ttsService === 'qwen' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9em' }}>并发数量:</span>
+              <input
+                type="range"
+                min="1"
+                max="50"
+                step="1"
+                value={batchSize}
+                onChange={(e) => setBatchSize(parseInt(e.target.value))}
+                style={{ width: 60, accentColor: '#22c55e', cursor: 'pointer' }}
+              />
+              <span style={{ color: '#fff', fontWeight: 'bold', minWidth: 14 }}>{batchSize}</span>
+            </div>
+          )}
+        </div>
+
         <h1 style={{
           textAlign: 'center',
           marginBottom: '5px',
@@ -1368,11 +1536,77 @@ function App() {
               activeIndex={activeIndex}
               onEditStart={setEditingIndex}
               onEditEnd={() => setEditingIndex(null)}
+              ttsService={ttsService}
             />
           </div>
         </div>
       </div >
-    </div >
+      {/* Dependency Installation Modal */}
+      {installingDeps && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.45)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          color: '#fff',
+          textAlign: 'center',
+          padding: '20px',
+          backdropFilter: 'blur(15px)',
+          WebkitBackdropFilter: 'blur(15px)',
+        }}>
+          <div style={{
+            background: 'rgba(255,255,255,0.05)',
+            padding: '40px',
+            borderRadius: '24px',
+            border: '1px solid rgba(255,255,255,0.1)',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            maxWidth: '600px'
+          }}>
+            <div className="spinner" style={{
+              width: '60px',
+              height: '60px',
+              border: '5px solid rgba(255,255,255,0.1)',
+              borderTopColor: '#6366f1',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite',
+              marginBottom: '30px',
+              boxShadow: '0 0 15px rgba(99, 102, 241, 0.5)'
+            }}></div>
+            <h2 style={{ marginBottom: '15px', color: '#fff' }}>⚙️ 正在同步 AI 运行环境</h2>
+            <p style={{ fontSize: '1.2em', marginBottom: '10px' }}>
+              正在安装核心依赖: <span style={{ color: '#818cf8', fontWeight: 'bold' }}>{depsPackageName || '...'}</span>
+            </p>
+            <p style={{ color: '#aaa', maxWidth: '500px' }}>
+              这是为了让 Qwen3-TTS 与原有模型并存所必需的操作。这可能需要 2-5 分钟（取决于您的网络），请勿关闭软件。
+            </p>
+
+            <div style={{
+              marginTop: '30px',
+              padding: '10px 20px',
+              background: 'rgba(255,255,255,0.1)',
+              borderRadius: '20px',
+              color: '#818cf8',
+              fontWeight: 500
+            }}>
+              安装完成后将自动开始合成
+            </div>
+          </div>
+          <style>{`
+            @keyframes spin { to { transform: rotate(360deg); } }
+          `}</style>
+        </div>
+      )}
+    </div>
   )
 }
 

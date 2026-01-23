@@ -28,6 +28,7 @@ export interface TranslationPanelProps {
     onEditEnd?: () => void;
     onUploadSubtitle?: (file: File) => void;
     hasVideo?: boolean;
+    ttsService?: 'indextts' | 'qwen';
 }
 
 const TranslationPanel: React.FC<TranslationPanelProps> = ({
@@ -54,7 +55,8 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
     onEditStart,
     onEditEnd,
     onUploadSubtitle,
-    hasVideo = false
+    hasVideo = false,
+    ttsService = 'indextts'
 }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -169,10 +171,25 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
                         value={targetLang}
                         onChange={(e) => setTargetLang(e.target.value)}
                     >
-                        <option value="Chinese">中文</option>
-                        <option value="English">English</option>
-                        {/* <option value="Japanese">日本語</option>
-                        <option value="Korean">한국어</option> */}
+                        {ttsService === 'qwen' ? (
+                            <>
+                                <option value="Chinese">中文</option>
+                                <option value="English">English</option>
+                                <option value="Japanese">日本語</option>
+                                <option value="Korean">한국어</option>
+                                <option value="German">Deutsch</option>
+                                <option value="French">Français</option>
+                                <option value="Russian">Русский</option>
+                                <option value="Portuguese">Português</option>
+                                <option value="Spanish">Español</option>
+                                <option value="Italian">Italiano</option>
+                            </>
+                        ) : (
+                            <>
+                                <option value="Chinese">中文</option>
+                                <option value="English">English</option>
+                            </>
+                        )}
                     </select>
                     <button
                         onClick={onTranslate}

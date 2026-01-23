@@ -203,6 +203,19 @@ app.whenReady().then(() => {
                 console.error("Failed to parse partial:", e);
               }
             }
+
+            // Parse dependency installation markers: [DEPS_INSTALLING] package
+            const depsMatch = line.match(/\[DEPS_INSTALLING\]\s*(.*)/);
+            if (depsMatch) {
+              const packageDesc = depsMatch[1].trim();
+              _event.sender.send('backend-deps-installing', packageDesc);
+            }
+
+            // Parse dependency completion markers: [DEPS_DONE] package
+            const depsDoneMatch = line.match(/\[DEPS_DONE\]\s*(.*)/);
+            if (depsDoneMatch) {
+              _event.sender.send('backend-deps-done');
+            }
           });
 
           console.log('[Py Stdout]:', str)
@@ -597,6 +610,12 @@ app.whenReady().then(() => {
           alignment: checkDir(['alignment']),
           index_tts: checkDir(['index-tts', 'index-tts/hub']),
           qwen: checkDir(['Qwen2.5-7B-Instruct', 'qwen/Qwen2.5-7B-Instruct']),
+          qwen_tokenizer: checkDir(['Qwen3-TTS-Tokenizer-12Hz', 'Qwen/Qwen3-TTS-Tokenizer-12Hz']),
+          qwen_17b_base: checkDir(['Qwen3-TTS-12Hz-1.7B-Base', 'Qwen/Qwen3-TTS-12Hz-1.7B-Base']),
+          qwen_17b_design: checkDir(['Qwen3-TTS-12Hz-1.7B-VoiceDesign', 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign']),
+          qwen_17b_custom: checkDir(['Qwen3-TTS-12Hz-1.7B-CustomVoice', 'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice']),
+          qwen_06b_base: checkDir(['Qwen3-TTS-12Hz-0.6B-Base', 'Qwen/Qwen3-TTS-12Hz-0.6B-Base']),
+          qwen_06b_custom: checkDir(['Qwen3-TTS-12Hz-0.6B-CustomVoice', 'Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice']),
           rife: checkDir(['rife', 'rife-ncnn-vulkan'])
         };
 

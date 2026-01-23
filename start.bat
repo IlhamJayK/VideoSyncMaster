@@ -106,12 +106,12 @@ node --version
 
 
 
-echo [INFO] 检查 Python 依赖状态...
-python "%~dp0backend\check_requirements.py" "%~dp0requirements.txt"
-if errorlevel 1 (
-    echo [INFO] 检测到缺失依赖，正在自动补全...
-    python -m pip install -r "%~dp0requirements.txt"
-)
+rem echo [INFO] 检查 Python 依赖状态...
+rem python "%~dp0backend\check_requirements.py" "%~dp0requirements.txt"
+rem if errorlevel 1 (
+rem     echo [INFO] 检测到缺失依赖，正在自动补全...
+rem     python -m pip install -r "%~dp0requirements.txt"
+rem )
 cd ui
 
 if not exist "node_modules" (

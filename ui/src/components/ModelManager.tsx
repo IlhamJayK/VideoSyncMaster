@@ -4,7 +4,12 @@ interface ModelStatus {
     whisperx: boolean;
     alignment: boolean;
     index_tts: boolean;
-    qwen: boolean;
+    qwen_tokenizer: boolean;
+    qwen_17b_base: boolean;
+    qwen_17b_design: boolean;
+    qwen_17b_custom: boolean;
+    qwen_06b_base: boolean;
+    qwen_06b_custom: boolean;
     rife: boolean;
 }
 
@@ -63,9 +68,24 @@ const ModelManager: React.FC<ModelManagerProps> = ({ themeMode }) => {
             } else if (modelKey === 'qwen') {
                 modelId = 'Qwen/Qwen2.5-7B-Instruct';
                 localDir = 'models/Qwen2.5-7B-Instruct';
-            } else if (modelKey === 'qwen') {
-                modelId = 'Qwen/Qwen2.5-7B-Instruct';
-                localDir = 'models/Qwen2.5-7B-Instruct';
+            } else if (modelKey === 'qwen_tokenizer') {
+                modelId = 'Qwen/Qwen3-TTS-Tokenizer-12Hz';
+                localDir = 'models/Qwen3-TTS-Tokenizer-12Hz';
+            } else if (modelKey === 'qwen_17b_base') {
+                modelId = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
+                localDir = 'models/Qwen3-TTS-12Hz-1.7B-Base';
+            } else if (modelKey === 'qwen_17b_design') {
+                modelId = 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
+                localDir = 'models/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
+            } else if (modelKey === 'qwen_17b_custom') {
+                modelId = 'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice';
+                localDir = 'models/Qwen3-TTS-12Hz-1.7B-CustomVoice';
+            } else if (modelKey === 'qwen_06b_base') {
+                modelId = 'Qwen/Qwen3-TTS-12Hz-0.6B-Base';
+                localDir = 'models/Qwen3-TTS-12Hz-0.6B-Base';
+            } else if (modelKey === 'qwen_06b_custom') {
+                modelId = 'Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice';
+                localDir = 'models/Qwen3-TTS-12Hz-0.6B-CustomVoice';
             } else if (modelKey === 'rife') {
                 isGenericFile = true;
                 modelId = 'rife-ncnn-vulkan';
@@ -122,8 +142,19 @@ const ModelManager: React.FC<ModelManagerProps> = ({ themeMode }) => {
     const models = [
         { key: 'whisperx', name: 'WhisperX', desc: '核心语音识别模型 (ASR)', link: 'Models/faster-whisper-large-v3-turbo-ct2' },
         { key: 'alignment', name: 'Forced Alignment', desc: '语音强制对齐模型 (Wav2Vec2)', link: 'Models/alignment' },
-        { key: 'index_tts', name: 'Index-TTS', desc: '语音克隆/合成模型', link: 'Models/index-tts' },
-        { key: 'qwen', name: 'Qwen 2.5', desc: '本地大语言模型 (LLM)', link: 'Models/Qwen2.5-7B-Instruct' },
+        { key: 'index_tts', name: 'Index-TTS', desc: 'Index-TTS 语音克隆模型', link: 'Models/index-tts' },
+
+        { key: 'qwen_tokenizer', name: 'Qwen3 Tokenizer', desc: 'Qwen3 分词器 (Tokenizer-12Hz)', link: 'Models/Qwen3-TTS-Tokenizer-12Hz' },
+
+        { key: 'qwen_17b_base', name: 'Qwen3 1.7B Base', desc: 'Qwen3 声音克隆 (基础模型, 1.7B)', link: 'Models/Qwen3-TTS-12Hz-1.7B-Base' },
+
+
+        { key: 'qwen_17b_design', name: 'Qwen3 1.7B Design', desc: 'Qwen3 声音设计 ', link: 'Models/Qwen3-TTS-12Hz-1.7B-VoiceDesign' },
+        { key: 'qwen_17b_custom', name: 'Qwen3 1.7B Preset', desc: 'Qwen3 预置音色 ', link: 'Models/Qwen3-TTS-12Hz-1.7B-CustomVoice' },
+
+        { key: 'qwen_06b_base', name: 'Qwen3 0.6B Base', desc: 'Qwen3 声音克隆 (轻量版, 0.6B)', link: 'Models/Qwen3-TTS-12Hz-0.6B-Base' },
+        { key: 'qwen_06b_custom', name: 'Qwen3 0.6B Preset', desc: 'Qwen3 预置音色 (轻量版)', link: 'Models/Qwen3-TTS-12Hz-0.6B-CustomVoice' },
+
         { key: 'rife', name: 'RIFE Flow', desc: '光流法补帧模型 ', link: 'Models/rife' },
     ];
 
@@ -195,7 +226,7 @@ const ModelManager: React.FC<ModelManagerProps> = ({ themeMode }) => {
                                 </div>
 
                                 {/* Download Button for Index-TTS & WhisperX & Alignment & Qwen & RIFE */}
-                                {(m.key === 'index_tts' || m.key === 'whisperx' || m.key === 'alignment' || m.key === 'qwen' || m.key === 'rife') && !isInstalled && (
+                                {(m.key === 'index_tts' || m.key === 'whisperx' || m.key === 'alignment' || m.key.startsWith('qwen') || m.key === 'rife') && !isInstalled && (
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
                                         {isDownloadingThis ? (
                                             <>

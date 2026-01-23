@@ -73,7 +73,6 @@ class LLMTranslator:
         if not self.model:
             return None
         
-        # Improved prompt to ensure target language compliance
         messages = [
             {"role": "system", "content": f"You are a high-level translator. Translate the given text into {target_lang}. Output ONLY the translated text. Do not output the original text. Do not explain."},
             {"role": "user", "content": text}
@@ -90,8 +89,8 @@ class LLMTranslator:
         generated_ids = self.model.generate(
             model_inputs.input_ids,
             max_new_tokens=512,
-            do_sample=True,       # Enable sampling so retries vary
-            temperature=0.3,      # Low temperature for high quality but not fixed
+            do_sample=True,       
+            temperature=0.7,      
             top_p=0.9,
             repetition_penalty=1.1
         )

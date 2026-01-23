@@ -49,4 +49,6 @@ WeTextProcessing; sys_platform == 'linux'
 # GPU / DLL Fixes
 nvidia-cudnn-cu12<9.0.0
 
+sox
+
 
