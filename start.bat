@@ -72,33 +72,33 @@ echo [INFO] 检查 Node.js 环境...
 node --version >nul 2>&1
 if not errorlevel 1 goto :NODE_READY
 
-if exist "%~dp0node_env\node-v18.19.0-win-x64\node.exe" goto :SET_NODE_PATH
+if exist "%~dp0node-v22.16.0-x64.msi" goto :INSTALL_NODE_MSI
 
-echo [WARNING] 未检测到 Node.js，准备下载免安装版 (v18.19.0)...
-if not exist "%~dp0node_env" mkdir "%~dp0node_env"
+echo [WARNING] 未检测到 Node.js，且未找到安装包。
+echo 请下载 Node.js v22.16.0 并安装。
+echo 下载地址: https://npmmirror.com/mirrors/node/v22.16.0/node-v22.16.0-x64.msi
+pause
+exit /
 
-if not exist "%~dp0node_env\node.zip" (
-    echo [INFO] 正在从 npmmirror 下载...
-    echo 下载地址: https://registry.npmmirror.com/-/binary/node/v18.19.0/node-v18.19.0-win-x64.zip
-    powershell -Command "Invoke-WebRequest -Uri 'https://registry.npmmirror.com/-/binary/node/v18.19.0/node-v18.19.0-win-x64.zip' -OutFile '%~dp0node_env\node.zip'"
-)
+:INSTALL_NODE_MSI
+echo [INFO] 检测到 Node.js 安装包，正在启动安装向导...
+echo [IMPORTANT] 请在弹出的安装窗口中完成安装 (一路点击 Next 即可)
+echo.
+start /wait msiexec /i "%~dp0node-v22.16.0-x64.msi"
+echo.
+echo [INFO] 安装过程已结束。
+echo 请按任意键继续启动程序...
+pause
 
-echo [INFO] 正在解压 Node.js...
-tar -xf "%~dp0node_env\node.zip" -C "%~dp0node_env"
-if errorlevel 1 (
-    powershell -Command "Expand-Archive -Path '%~dp0node_env\node.zip' -DestinationPath '%~dp0node_env' -Force"
-)
-
-:SET_NODE_PATH
-echo [INFO] 配置 Node.js 环境变量...
-set PATH=%~dp0node_env\node-v18.19.0-win-x64;%PATH%
+rem 重新检测环境
 node --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Node.js配置失败，请手动安装。
+    echo [WARNING] 似乎未能识别到 Node.js 命令。
+    echo 请尝试 关闭当前窗口 并 重新运行 start.bat 以加载新的环境变量。
     pause
     exit /b
 )
-call npm config set registry https://registry.npmmirror.com
+goto :NODE_READY
 
 :NODE_READY
 echo [INFO] Node.js 就绪: 

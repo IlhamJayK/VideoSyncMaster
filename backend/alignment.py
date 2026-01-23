@@ -123,11 +123,7 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
                 continue
 
             try:
-                # Load audio with librosa (handles resampling to target_sr automatically)
-                # librosa loads as (channels, samples) or (samples,) if mono=True. 
-                # We force mono=False to handle stereo sources, or handle shape manually.
-                # Actually sf.read or librosa.load? librosa.load is good for resampling.
-                # librosa.load returns (y, sr). y is shape (n,) or (2, n) -> No, librosa usually mixes to mono unless mono=False
+
                 y, _ = librosa.load(file_path, sr=target_sr, mono=False)
                 
                 # Check shape. If mono (N,), reshape to (1, N)
