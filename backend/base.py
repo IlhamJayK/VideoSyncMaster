@@ -75,6 +75,7 @@ class BaseASR:
         """Load audio data and compute CRC32 hash for cache key."""
         if isinstance(self.audio_input, bytes):
             self.file_binary = self.audio_input
+            print(f"[BaseASR] Loaded audio from bytes: {len(self.file_binary)} bytes")
         elif isinstance(self.audio_input, str):
             ext = self.audio_input.split(".")[-1].lower()
             assert (
@@ -85,7 +86,9 @@ class BaseASR:
             ), f"File not found: {self.audio_input}"
             with open(self.audio_input, "rb") as f:
                 self.file_binary = f.read()
+            print(f"[BaseASR] Loaded audio from file: {self.audio_input} ({len(self.file_binary)} bytes)")
         else:
+            print(f"[BaseASR] Invalid audio_input type: {type(self.audio_input)}")
             raise ValueError("audio_input must be provided as string or bytes")
         crc32_value = zlib.crc32(self.file_binary) & 0xFFFFFFFF
         self.crc32_hex = format(crc32_value, "08x")

@@ -97,12 +97,7 @@ if not getattr(sys, 'frozen', False):
                 
     except Exception as e:
         print(f"[BOOTSTRAP WARNING] Failed to enforce portable python: {e}")
-# ---------------------------
 
-# Check for --model_dir in sys.argv early to set HF env vars before imports
-# Redirect stdout/stderr to log file for capturing crash/errors in detached mode
-# (Keep original stdout for JSON communication if needed, but for debugging we need visibility)
-# We will use a custom writer that writes to both file and original stream
 class DualWriter:
     def __init__(self, file_path, original_stream):
         self.file = open(file_path, "a", encoding="utf-8", buffering=1)
@@ -171,8 +166,6 @@ if not MODELS_HUB_DIR:
          print("  [WARNING] No valid model dir found in candidates. Defaulting to Root path.")
          MODELS_HUB_DIR = os.path.join(APP_ROOT, "models", "index-tts", "hub")
 
-# 验证模型目录是否存在
-# 验证模型目录是否存在
 if not os.path.exists(MODELS_HUB_DIR):
     print(f"[WARNING] Model directory not found: {MODELS_HUB_DIR}", file=sys.stderr)
     print(f"[WARNING] Local WhisperX models will be unavailable. API-based services (Jianying/Bcut) can still be used.", file=sys.stderr)
@@ -202,35 +195,59 @@ else:
 
 def setup_gpu_paths():
     """
-    Add PyTorch and NVIDIA cuDNN directories to PATH so ctranslate2/whisperx can find them.
-    Lazy loaded to prevent startup hangs.
+    Add PyTorch and NVIDIA cuDNN directories to PATH and DLL search path.
+    Essential for Windows portable environments to find cudnn_ops_infer64_8.dll etc.
+    MUST be called before 'import torch' to prevent DLL load crashes.
     """
     try:
-        debug_log("Setting up GPU paths...")
-        import torch
-        import pathlib
+        # Helper to add valid paths
+        def add_path(path):
+            if os.path.exists(path):
+                # 1. Add to PATH
+                if path not in os.environ["PATH"]:
+                    os.environ["PATH"] = path + os.pathsep + os.environ["PATH"]
+                    # print(f"[DEBUG] Added to PATH: {path}")
+                
+                # 2. Add to DLL Directory (Python 3.8+ Windows)
+                if hasattr(os, 'add_dll_directory'):
+                    try:
+                        os.add_dll_directory(path)
+                        # print(f"[DEBUG] Added DLL Directory: {path}")
+                    except Exception as e:
+                        pass
+
+        # 1. Proactively add portable python paths (Pre-import fix for hard crashes)
+        # This guesses the location of site-packages relative to python.exe
+        base_dir = os.path.dirname(sys.executable)
         
-        # 1. Add torch/lib (often contains bundled cuDNN v9, but also dependencies)
-        torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
-        if os.path.exists(torch_lib):
-             os.environ["PATH"] = torch_lib + os.pathsep + os.environ["PATH"]
-             # print(f"[DEBUG] Added torch lib to PATH: {torch_lib}")
-    
-        # 2. Add nvidia-cudnn (v8) from site-packages if installed
-        # Expected path: .../Lib/site-packages/nvidia/cudnn/bin
-        site_packages = os.path.dirname(os.path.dirname(torch.__file__)) # torch is in site-packages
-        cudnn_bin = os.path.join(site_packages, "nvidia", "cudnn", "bin")
-        if os.path.exists(cudnn_bin):
-            os.environ["PATH"] = cudnn_bin + os.pathsep + os.environ["PATH"]
-            print(f"[DEBUG] Added nvidia-cudnn v8 bin to PATH: {cudnn_bin}")
-        else:
-            # Fallback: Check local python Lib if not resolved above
-            if not getattr(sys, 'frozen', False):
-                 # Try relative to current script for dev env
-                 dev_cudnn = os.path.join(os.path.dirname(site_packages), "nvidia", "cudnn", "bin")
-                 if os.path.exists(dev_cudnn):
-                     os.environ["PATH"] = dev_cudnn + os.pathsep + os.environ["PATH"]
-    
+        # Candidate: Lib/site-packages (Windows Default/Portable)
+        site_packages = os.path.join(base_dir, "Lib", "site-packages")
+        if not os.path.exists(site_packages):
+             # Try lowercase/variants
+             site_packages = os.path.join(base_dir, "lib", "site-packages")
+
+        if os.path.exists(site_packages):
+            # Add NVIDIA dependencies explicitly BEFORE torch import
+            nvidia_packages = ["cudnn", "cublas", "cuda_runtime", "cudart"]
+            for pkg in nvidia_packages:
+                for sub in ["bin", "lib"]: # Check both bin and lib
+                    p = os.path.join(site_packages, "nvidia", pkg, sub)
+                    add_path(p)
+
+            # Add torch/lib
+            add_path(os.path.join(site_packages, "torch", "lib"))
+        
+        # 2. Also try via standard import if it works (Double check)
+        try:
+            import torch
+            torch_path = os.path.dirname(torch.__file__)
+            add_path(os.path.join(torch_path, 'lib'))
+            
+            site_pkgs = os.path.dirname(os.path.dirname(torch.__file__))
+            add_path(os.path.join(site_pkgs, "nvidia", "cudnn", "bin"))
+        except:
+            pass # Ignore import errors here, we relied on heuristic above
+
     except Exception as e:
         print(f"[WARNING] Failed to patch DLL paths: {e}")
 
@@ -532,6 +549,9 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
 
 
 def main():
+    # Setup GPU paths early to prevent DLL load errors
+    setup_gpu_paths()
+
     parser = argparse.ArgumentParser(description="VideoSync Backend")
     parser.add_argument("--action", type=str, help="Action to perform: asr, tts, align, merge_video", default="test_asr")
     parser.add_argument("--input", type=str, help="Input file path or JSON string for complex inputs")
@@ -1022,3 +1042,6 @@ def main():
 if __name__ == "__main__":
     debug_log("Entering main block")
     main()
+    print("Force exiting...")
+    sys.stdout.flush()
+    os._exit(0)

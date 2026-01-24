@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface CompensationStrategyProps {
     themeMode?: 'light' | 'dark' | 'gradient';
@@ -8,6 +9,7 @@ const CompensationStrategy: React.FC<CompensationStrategyProps> = ({ themeMode }
     const isLightMode = themeMode === 'gradient' || themeMode === 'light';
     const [strategy, setStrategy] = useState<string>('auto_speedup');
     const [hasRife, setHasRife] = useState<boolean>(false);
+    const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
     // Initial check for RIFE availability
     useEffect(() => {
@@ -32,7 +34,7 @@ const CompensationStrategy: React.FC<CompensationStrategyProps> = ({ themeMode }
     const handleSave = () => {
         localStorage.setItem('compensation_strategy', strategy);
         // Dispatch event or just rely on localStorage read at generation time
-        alert('策略配置已保存！将在下次生成时生效。');
+        setShowSaveConfirm(true);
     };
 
     const strategies = [
@@ -122,6 +124,17 @@ const CompensationStrategy: React.FC<CompensationStrategyProps> = ({ themeMode }
                     💾 保存策略配置
                 </button>
             </div>
+
+            <ConfirmDialog
+                isOpen={showSaveConfirm}
+                title="系统提示"
+                message="策略配置已保存！将在下次生成时生效。"
+                onConfirm={() => setShowSaveConfirm(false)}
+                isLightMode={isLightMode}
+                confirmText="确定"
+                onCancel={undefined}
+                confirmColor="#10b981"
+            />
         </div>
     );
 };

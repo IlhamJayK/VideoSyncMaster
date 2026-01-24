@@ -255,10 +255,6 @@ def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None, va
     2. Align (WhipserX Phoneme Alignment - Only for WhisperX)
     """
     
-    # ... (code truncated in view, assuming context here is safe to just change signature and below usage)
-    # Actually I need to match the indentation and content correctly.
-    # The signature is at line 258. The usage is at 410.
-    # I should use multi_replace for this to be clean.
 
     
     # If input is video, extract audio first
@@ -280,10 +276,17 @@ def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None, va
         file_hash = hashlib.md5(abs_path.encode('utf-8')).hexdigest()
         cached_audio = os.path.join(cache_dir, f"{file_hash}.mp3")
         
-        if os.path.exists(cached_audio):
+        if os.path.exists(cached_audio) and os.path.getsize(cached_audio) > 0:
              print(f"Using cached audio: {cached_audio}")
              audio_path = cached_audio
         else:
+            if os.path.exists(cached_audio):
+                print(f"Cached audio is empty (0 bytes), re-extracting...")
+                try:
+                    os.remove(cached_audio)
+                except OSError:
+                    pass
+            
             print(f"Extracting audio to {cached_audio}...")
             try:
                 from pydub import AudioSegment
@@ -472,17 +475,38 @@ def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None, va
         align_model_name = None # Let WhisperX pick default if not found
         
         if os.path.exists(local_align_dir):
-            if os.path.exists(os.path.join(local_align_dir, "config.json")):
+            has_config = os.path.exists(os.path.join(local_align_dir, "config.json"))
+            has_weights = os.path.exists(os.path.join(local_align_dir, "pytorch_model.bin")) or \
+                          os.path.exists(os.path.join(local_align_dir, "model.safetensors"))
+            
+            if has_config and has_weights:
                  align_model_name = local_align_dir
                  print(f"Found local alignment model at: {local_align_dir}")
             else:
-                # Check for subfolder if user dragged the folder in
-                subdirs = [d for d in os.listdir(local_align_dir) if os.path.isdir(os.path.join(local_align_dir, d))]
-                if subdirs:
+                 # Check for subfolder if user dragged the folder in
+                 subdirs = [d for d in os.listdir(local_align_dir) if os.path.isdir(os.path.join(local_align_dir, d))]
+                 if subdirs:
                     possible_path = os.path.join(local_align_dir, subdirs[0])
-                    if os.path.exists(os.path.join(possible_path, "config.json")):
+                    if os.path.exists(os.path.join(possible_path, "config.json")) and \
+                       (os.path.exists(os.path.join(possible_path, "pytorch_model.bin")) or \
+                        os.path.exists(os.path.join(possible_path, "model.safetensors"))):
                         align_model_name = possible_path
                         print(f"Found local alignment model at: {possible_path}")
+        
+        # If we didn't find a valid local model (with weights), warn the user.
+        if not align_model_name:
+             print(f"Local alignment model not found (or missing weights).")
+             # Strict Offline Mode: Fail with instruction
+             if os.environ.get("HF_HUB_OFFLINE") == "1":
+                 error_msg = (
+                     f"CRITICAL ERROR: Alignment model weights missing in {local_align_dir}\n"
+                     "Please manually download 'pytorch_model.bin' or 'model.safetensors' and place it in that folder.\n"
+                     "Auto-download is disabled by policy.\n"
+                     "Proceeding with unaligned results (timestamps may be less accurate)."
+                 )
+                 print(error_msg)
+                 # Return unaligned segments to prevent crash
+                 return split_into_subtitles(result["segments"], max_chars=30)
                 
         if not align_model_name:
              print(f"Local alignment model not found (checked {local_align_dir} and subdirs). Downloading from HF Hub...")

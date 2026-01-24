@@ -10,6 +10,7 @@ import ModelManager from './components/ModelManager';
 import TTSConfig from './components/TTSConfig';
 import WhisperConfig from './components/WhisperConfig';
 import CompensationStrategy from './components/CompensationStrategy';
+import ConfirmDialog from './components/ConfirmDialog';
 
 
 function App() {
@@ -42,6 +43,9 @@ function App() {
   const translationRef = useRef<HTMLDivElement>(null);
   const isScrollingRef = useRef<null | 'timeline' | 'translation'>(null);
   const [leftWidth, setLeftWidth] = useState(() => parseInt(localStorage.getItem('leftWidth') || '400'));
+  const [showRepairConfirm, setShowRepairConfirm] = useState(false);
+  const [repairConfirmMessage, setRepairConfirmMessage] = useState('');
+  const [repairResult, setRepairResult] = useState<{ success: boolean; message: string } | null>(null);
   const [activeQwenMode, setActiveQwenMode] = useState<'clone' | 'design' | 'preset'>(() => (localStorage.getItem('qwen_mode') as any) || 'clone');
   const [timelineWidth, setTimelineWidth] = useState(() => parseInt(localStorage.getItem('timelineWidth') || '500'));
   const [dragTarget, setDragTarget] = useState<'left' | 'middle' | null>(null);
@@ -56,11 +60,18 @@ function App() {
     const checkEnv = async () => {
       try {
         const result = await (window as any).ipcRenderer.invoke('check-python-env');
-        if (result && result.success && result.missing) {
+
+        if (result && !result.success) {
+          if (result.status === 'missing_python') {
+            setStatus("未检测到 Python 环境 (根目录下无 python 文件夹)，请手动下载或放置便携版 Python。");
+          } else {
+            console.error("Env Check Failed:", result.error);
+          }
+        } else if (result && result.success && result.missing) {
           setMissingDeps(result.missing);
           if (result.missing.length > 0) {
             console.log("Missing dependencies:", result.missing);
-            setStatus(`检测到 ${result.missing.length} 个缺失的 Python 依赖`);
+            setStatus(`检测到运行环境缺失依赖，请点击左下角【修复运行环境】工具图标进行修复。`);
           }
         }
       } catch (e) {
@@ -1043,29 +1054,37 @@ function App() {
       message = `检测到以下缺失的依赖项:\n\n${missingDeps.join(', ')}\n\n点击“确定”将尝试自动安装这些依赖。\n过程可能需要几分钟，且需联网。是否继续？`;
     }
 
-    const confirm = window.confirm(message);
-    if (!confirm) return;
+    setRepairConfirmMessage(message);
+    setShowRepairConfirm(true);
+  };
 
+  const confirmRepairAction = async () => {
+    setShowRepairConfirm(false);
+
+    // Continue with original logic
     setLoading(true);
-    setIsIndeterminate(true);
-    setStatus("正在修复环境 (pip install)... 请耐心等待");
+    setInstallingDeps(true);
+    setDepsPackageName('正在修复运行环境 (pip install)...');
+    // setIsIndeterminate(true); // Redundant with overlay
 
     try {
       const result = await (window as any).ipcRenderer.invoke('fix-python-env');
       if (result && result.success) {
         setStatus("环境修复完成！请重启软件以生效。");
-        alert("修复完成！建议重启软件。");
+        setRepairResult({ success: true, message: "修复完成！建议重启软件。" });
         setMissingDeps([]); // Clear flag
       } else {
         setStatus(`修复失败: ${result.error}`);
-        alert(`修复失败: ${result.error}\n请检查日志或网络。`);
+        setRepairResult({ success: false, message: `修复失败: ${result.error}\n请检查日志或网络。` });
       }
     } catch (e: any) {
       setStatus(`修复请求异常: ${e.message}`);
       console.error(e);
     } finally {
       setLoading(false);
-      setIsIndeterminate(false);
+      setInstallingDeps(false);
+      setDepsPackageName('');
+      // setIsIndeterminate(false);
     }
   };
 
@@ -1089,6 +1108,30 @@ function App() {
           cursor: 'pointer'
         }}
       ></theme-button>
+
+      <ConfirmDialog
+        isOpen={showRepairConfirm}
+        title="修复运行环境"
+        message={repairConfirmMessage}
+        onConfirm={confirmRepairAction}
+        onCancel={() => setShowRepairConfirm(false)}
+        isLightMode={bgMode === 'gradient'}
+        confirmText="确定修复"
+        cancelText="取消"
+        confirmColor="#22c55e"
+      />
+
+      <ConfirmDialog
+        isOpen={!!repairResult}
+        title="系统提示"
+        message={repairResult?.message || ""}
+        onConfirm={() => setRepairResult(null)}
+        isLightMode={bgMode === 'gradient'}
+        confirmText="确定"
+        cancelText="" // Hide cancel
+        onCancel={undefined}
+        confirmColor={repairResult?.success ? "#22c55e" : "#ef4444"}
+      />
 
       {/* Smooth Background Transition Layer (z-index 0) */}
 
@@ -1184,7 +1227,7 @@ function App() {
 
           {ttsService === 'qwen' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9em' }}>并发数量:</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9em' }}>TTS并发数量:</span>
               <input
                 type="range"
                 min="1"

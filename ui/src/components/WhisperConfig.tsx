@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface WhisperConfigProps {
     themeMode?: 'light' | 'dark' | 'gradient';
@@ -10,6 +11,8 @@ const WhisperConfig: React.FC<WhisperConfigProps> = ({ themeMode }) => {
     // Default values matching backend defaults
     const [vadOnset, setVadOnset] = useState<number>(0.700);
     const [vadOffset, setVadOffset] = useState<number>(0.700);
+    const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
 
     // Load config from localStorage
     useEffect(() => {
@@ -23,16 +26,19 @@ const WhisperConfig: React.FC<WhisperConfigProps> = ({ themeMode }) => {
     const handleSave = () => {
         localStorage.setItem('whisper_vad_onset', vadOnset.toString());
         localStorage.setItem('whisper_vad_offset', vadOffset.toString());
-        alert('Whisper VAD 配置已保存！将在下次运行时生效。');
+        setShowSaveConfirm(true);
     };
 
     const handleReset = () => {
-        if (window.confirm('确定要恢复默认配置吗？')) {
-            setVadOnset(0.700);
-            setVadOffset(0.700);
-            localStorage.removeItem('whisper_vad_onset');
-            localStorage.removeItem('whisper_vad_offset');
-        }
+        setShowResetConfirm(true);
+    };
+
+    const confirmResetAction = () => {
+        setVadOnset(0.700);
+        setVadOffset(0.700);
+        localStorage.removeItem('whisper_vad_onset');
+        localStorage.removeItem('whisper_vad_offset');
+        setShowResetConfirm(false);
     };
 
     const SliderControl = ({ label, value, setValue, min, max, step, desc }: any) => (
@@ -113,6 +119,29 @@ const WhisperConfig: React.FC<WhisperConfigProps> = ({ themeMode }) => {
                     💾 保存配置
                 </button>
             </div>
+
+            <ConfirmDialog
+                isOpen={showSaveConfirm}
+                title="系统提示"
+                message="Whisper VAD 配置已保存！将在下次运行时生效。"
+                onConfirm={() => setShowSaveConfirm(false)}
+                isLightMode={isLightMode}
+                confirmText="确定"
+                onCancel={undefined}
+                confirmColor="#10b981"
+            />
+
+            <ConfirmDialog
+                isOpen={showResetConfirm}
+                title="确认操作"
+                message="确定要恢复默认配置吗？此操作不可撤销。"
+                onConfirm={confirmResetAction}
+                onCancel={() => setShowResetConfirm(false)}
+                isLightMode={isLightMode}
+                confirmText="确定恢复"
+                cancelText="取消"
+                confirmColor="#ef4444"
+            />
         </div>
     );
 };

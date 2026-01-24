@@ -54,6 +54,7 @@ class BcutASR(BaseASR):
     def upload(self) -> None:
         """Request upload authorization and upload audio file."""
         if not self.file_binary:
+            print(f"[BcutASR] Error: file_binary is empty! Type: {type(self.file_binary)}")
             raise ValueError("No audio data to upload")
         payload = json.dumps(
             {

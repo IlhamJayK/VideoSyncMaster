@@ -506,17 +506,23 @@ app.whenReady().then(() => {
 
         } else {
           projectRoot = path.resolve(process.env.APP_ROOT, '..');
-          if (fs.existsSync(path.join(projectRoot, 'python', 'python.exe'))) {
-            pythonExe = path.join(projectRoot, 'python', 'python.exe');
+          const localPythonPath = path.join(projectRoot, 'python', 'python.exe');
+
+          if (fs.existsSync(localPythonPath)) {
+            pythonExe = localPythonPath;
           } else {
-            pythonExe = 'python';
+            // STRICT CHECK: If we are in dev but want to simulate product behavior or user requested strict check:
+            // The user explicitly asked "When root dir has no python...". 
+            // So we fail here if local python is missing, instead of falling back to system 'python'.
+            resolve({ success: false, status: 'missing_python', error: `找不到 Python 解释器。请确认 python 文件夹存在于 ${projectRoot}` });
+            return;
           }
           requirementsPath = path.join(projectRoot, 'requirements.txt');
           checkScriptPath = path.join(projectRoot, 'backend', 'check_requirements.py');
         }
 
-        if (!fs.existsSync(pythonExe) && pythonExe !== 'python') {
-          resolve({ success: false, error: "Python interpreter not found" });
+        if (!fs.existsSync(pythonExe)) {
+          resolve({ success: false, status: 'missing_python', error: `找不到 Python 解释器。请确认 python 文件夹存在于 ${projectRoot}` });
           return;
         }
         if (!fs.existsSync(requirementsPath)) {
