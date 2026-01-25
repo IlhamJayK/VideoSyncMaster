@@ -341,6 +341,20 @@ def run_asr(audio_path, model_path=None, service="whisperx", output_dir=None, va
         transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
         transformers.modeling_utils.check_torch_load_is_safe = lambda: None
         
+        # FIX: PyTorch 2.6+ defaults to weights_only=True, breaking pyannote/whisperx
+        # User requested "Global Allow" (disable check). Monkey-patching torch.load to restore legacy behavior.
+        _original_load = torch.load
+        def _safe_load_wrapper(*args, **kwargs):
+            # Force weights_only=False to disable security checks globally, even if caller requested True
+            if 'weights_only' in kwargs:
+                print(f"[ASR] Overriding weights_only=True to False for: {args[0] if args else 'unknown'}")
+            kwargs['weights_only'] = False
+            return _original_load(*args, **kwargs)
+        
+        torch.load = _safe_load_wrapper
+        print("[ASR] Global patch applied: torch.load Forced to weights_only=False")
+
+        
     except ImportError as e:
         print(f"Failed to import WhisperX dependencies: {e}")
         return []

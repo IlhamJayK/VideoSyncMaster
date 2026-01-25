@@ -240,17 +240,53 @@ app.whenReady().then(() => {
             const startMarker = '__JSON_START__'
             const endMarker = '__JSON_END__'
             const startIndex = outputData.indexOf(startMarker)
-            const endIndex = outputData.indexOf(endMarker)
+            const endIndex = outputData.lastIndexOf(endMarker) // Use lastIndexOf for safety
 
-            if (startIndex !== -1 && endIndex !== -1) {
-              const jsonStr = outputData.substring(startIndex + startMarker.length, endIndex).trim()
-              const result = JSON.parse(jsonStr)
-              resolve(result)
+            if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+              let jsonFullStr = outputData.substring(startIndex + startMarker.length, endIndex).trim()
+
+              // [ROBUST] Find the actual JSON object boundaries within the markers
+              const firstBrace = jsonFullStr.indexOf('{')
+              const lastBrace = jsonFullStr.lastIndexOf('}')
+              const firstBracket = jsonFullStr.indexOf('[')
+              const lastBracket = jsonFullStr.lastIndexOf(']')
+
+              // Determine if it's an object or array based on what comes first
+              let startIdx = -1;
+              let endIdx = -1;
+
+              // If both exist, take the earlier one. If only one exists, take it.
+              if (firstBrace !== -1 && firstBracket !== -1) {
+                if (firstBrace < firstBracket) {
+                  startIdx = firstBrace;
+                  endIdx = lastBrace;
+                } else {
+                  startIdx = firstBracket;
+                  endIdx = lastBracket;
+                }
+              } else if (firstBrace !== -1) {
+                startIdx = firstBrace;
+                endIdx = lastBrace;
+              } else if (firstBracket !== -1) {
+                startIdx = firstBracket;
+                endIdx = lastBracket;
+              }
+
+              if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+                const cleanJsonStr = jsonFullStr.substring(startIdx, endIdx + 1)
+                const result = JSON.parse(cleanJsonStr)
+                resolve(result)
+              } else {
+                // Fallback (e.g. simple primitives or clean string)
+                const result = JSON.parse(jsonFullStr)
+                resolve(result)
+              }
             } else {
-              console.warn('JSON markers not found in output')
+              console.warn('JSON markers not found or invalid in output')
               resolve({ rawOutput: outputData, rawError: errorData })
             }
           } catch (e) {
+            console.error('Failed to parse backend output. Raw:', outputData);
             reject(new Error(`Failed to parse backend output: ${e}`))
           }
         })
@@ -631,6 +667,17 @@ app.whenReady().then(() => {
         resolve({ success: false, error: e.message });
       }
     });
+  });
+
+  // IPC Handler to check file existence (Robust check)
+  ipcMain.handle('check-file-exists', async (_event, filePath: string) => {
+    try {
+      if (!filePath) return false;
+      return fs.existsSync(filePath);
+    } catch (e) {
+      console.error("Check file exists error:", e);
+      return false;
+    }
   });
 
 

@@ -18,7 +18,14 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
     const [temperature, setTemperature] = useState<number>(0.7);
     const [topP, setTopP] = useState<number>(0.8);
     const [repetitionPenalty, setRepetitionPenalty] = useState<number>(1.0);
+
     const [cfgScale, setCfgScale] = useState<number>(0.7);
+
+    // Advanced Params
+    const [numBeams, setNumBeams] = useState<number>(1);
+    const [topK, setTopK] = useState<number>(5);
+    const [lengthPenalty, setLengthPenalty] = useState<number>(1.0);
+    const [maxMelTokens, setMaxMelTokens] = useState<number>(2048);
 
     // Switching State
     const [switching, setSwitching] = useState(false);
@@ -46,6 +53,15 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
         const storedCfg = localStorage.getItem('tts_cfg_scale');
         if (storedCfg) setCfgScale(parseFloat(storedCfg));
 
+        const storedBeams = localStorage.getItem('tts_num_beams');
+        if (storedBeams) setNumBeams(parseInt(storedBeams));
+        const storedTopK = localStorage.getItem('tts_top_k');
+        if (storedTopK) setTopK(parseInt(storedTopK));
+        const storedLenPen = localStorage.getItem('tts_length_penalty');
+        if (storedLenPen) setLengthPenalty(parseFloat(storedLenPen));
+        const storedMaxMel = localStorage.getItem('tts_max_mel_tokens');
+        if (storedMaxMel) setMaxMelTokens(parseInt(storedMaxMel));
+
         if (activeService) {
             // If we just mounted, ensuring viewMode syncs if desired not strictly needed if we use localStorage
         }
@@ -62,6 +78,10 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
         localStorage.setItem('tts_top_p', topP.toString());
         localStorage.setItem('tts_repetition_penalty', repetitionPenalty.toString());
         localStorage.setItem('tts_cfg_scale', cfgScale.toString());
+        localStorage.setItem('tts_num_beams', numBeams.toString());
+        localStorage.setItem('tts_top_k', topK.toString());
+        localStorage.setItem('tts_length_penalty', lengthPenalty.toString());
+        localStorage.setItem('tts_max_mel_tokens', maxMelTokens.toString());
         setFeedback({ title: '保存成功', message: 'IndexTTS 配置已保存！', type: 'success' });
     };
 
@@ -71,6 +91,10 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
         setTopP(0.8);
         setRepetitionPenalty(1.0);
         setCfgScale(0.7);
+        setNumBeams(1);
+        setTopK(5);
+        setLengthPenalty(1.0);
+        setMaxMelTokens(2048);
         localStorage.removeItem('tts_ref_audio_path');
         // also reset other keys if needed? 
         // For now just ref audio is the main one persisted separately
@@ -232,20 +256,47 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
                                 用于由 AI 克隆音色的目标声音文件 (3-10秒 wav/mp3)。如果不指定，将使用默认音色。
                             </p>
                             <div style={{ display: 'flex', gap: '10px' }}>
-                                <input
-                                    type="text"
-                                    value={refAudioPath}
-                                    onChange={(e) => setRefAudioPath(e.target.value)}
-                                    placeholder="点击右侧按钮选择文件..."
-                                    style={{
-                                        flex: 1,
-                                        padding: '8px',
-                                        borderRadius: '4px',
-                                        border: '1px solid #ccc',
-                                        background: isLightMode ? '#fff' : 'rgba(0,0,0,0.2)',
-                                        color: isLightMode ? '#000' : '#fff'
-                                    }}
-                                />
+                                <div style={{ flex: 1, position: 'relative' }}>
+                                    <input
+                                        type="text"
+                                        value={refAudioPath}
+                                        readOnly
+                                        placeholder="未选择 (自动使用当前片段原音)"
+                                        style={{
+                                            width: '100%',
+                                            padding: '8px',
+                                            paddingRight: '30px',
+                                            borderRadius: '4px',
+                                            border: '1px solid #ccc',
+                                            background: isLightMode ? '#f3f4f6' : 'rgba(0,0,0,0.2)',
+                                            color: isLightMode ? '#000' : '#fff',
+                                            cursor: 'not-allowed',
+                                            boxSizing: 'border-box'
+                                        }}
+                                    />
+                                    {refAudioPath && (
+                                        <button
+                                            onClick={() => {
+                                                setRefAudioPath('');
+                                                localStorage.removeItem('tts_ref_audio_path');
+                                            }}
+                                            title="清除自定义引用，恢复自动"
+                                            style={{
+                                                position: 'absolute',
+                                                right: '5px',
+                                                top: '50%',
+                                                transform: 'translateY(-50%)',
+                                                background: 'transparent',
+                                                border: 'none',
+                                                cursor: 'pointer',
+                                                color: '#ef4444',
+                                                fontSize: '1.2em'
+                                            }}
+                                        >
+                                            ✕
+                                        </button>
+                                    )}
+                                </div>
                                 <button
                                     onClick={handleSelectFile}
                                     style={{
@@ -254,12 +305,16 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
                                         color: 'white',
                                         border: 'none',
                                         borderRadius: '4px',
-                                        cursor: 'pointer'
+                                        cursor: 'pointer',
+                                        whiteSpace: 'nowrap'
                                     }}
                                 >
                                     📂 选择文件
                                 </button>
                             </div>
+                            <p style={{ fontSize: '0.8em', color: '#10b981', marginTop: '5px' }}>
+                                {refAudioPath ? '⚠️ 已设置全局参考音频 (所有片段将克隆此声音)' : '✅ 当前为自动模式: 每个片段将使用自身对应的原视频语音作为参考 (如果不想要原音色，请上传指定文件)。'}
+                            </p>
                         </div>
 
                         <div style={{ borderTop: isLightMode ? '1px solid #eee' : '1px solid #444', margin: '20px 0' }}></div>
@@ -271,6 +326,7 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
                             value={temperature}
                             setValue={setTemperature}
                             min={0.1} max={1.5} step={0.1}
+                            desc="控制生成结果的随机性。数值越高(>0.8)，语气情感越丰富，但可能不稳定；数值越低(<0.5)，声音越平稳单一。"
                         />
 
                         <SliderControl
@@ -278,6 +334,7 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
                             value={topP}
                             setValue={setTopP}
                             min={0.1} max={1.0} step={0.05}
+                            desc="控制候选词的概率阈值。较低的值（如 0.5）会使模型更加保守和准确，较高的值（如 0.9）会增加变化性。"
                         />
 
                         <SliderControl
@@ -285,6 +342,7 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
                             value={repetitionPenalty}
                             setValue={setRepetitionPenalty}
                             min={1.0} max={20.0} step={0.5}
+                            desc="重复惩罚系数。如果发现生成的语音有结巴或重复现象，可适当调高此值（建议 1.0 - 2.0）。"
                         />
 
                         <SliderControl
@@ -292,7 +350,48 @@ const TTSConfig: React.FC<TTSConfigProps> = ({ themeMode, activeService, onServi
                             value={cfgScale}
                             setValue={setCfgScale}
                             min={0.0} max={2.0} step={0.1}
+                            desc="引导系数（类似于 SD）。控制模型多大程度上遵循提示。IndexTTS 中通常保持默认 0.7 即可。"
                         />
+
+
+
+                        <SliderControl
+                            label="Num Beams (束搜索数量)"
+                            value={numBeams}
+                            setValue={setNumBeams}
+                            min={1} max={5} step={1}
+                            desc="Beam Search 的束宽。1 为贪婪搜索/采样。大于 1 可提高质量但显著降低速度。"
+                        />
+
+                        <SliderControl
+                            label="Top K"
+                            value={topK}
+                            setValue={setTopK}
+                            min={0} max={100} step={1}
+                            desc="仅从概率最高的 K 个词中采样。配合 Top P 使用。"
+                        />
+
+                        <SliderControl
+                            label="Length Penalty (长度惩罚)"
+                            value={lengthPenalty}
+                            setValue={setLengthPenalty}
+                            min={0.0} max={2.0} step={0.1}
+                            desc=">1.0 鼓励生成更长的序列，<1.0 鼓励生成更短的序列。"
+                        />
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                <label style={{ fontWeight: 'bold' }}>Max Mel Tokens (最大长度限制)</label>
+                                <span style={{ fontWeight: 'bold', color: '#6366f1' }}>{maxMelTokens}</span>
+                            </div>
+                            <input
+                                type="number"
+                                value={maxMelTokens}
+                                onChange={(e) => setMaxMelTokens(parseInt(e.target.value))}
+                                style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc', background: isLightMode ? '#fff' : '#333', color: isLightMode ? '#000' : '#fff' }}
+                            />
+                            <p style={{ fontSize: '0.8em', color: isLightMode ? '#666' : '#aaa', margin: '5px 0 0 0' }}>生成的最大 Mel 帧数限制 (1 token ≈ 10-20ms)。防止无限生成。</p>
+                        </div>
 
                         <div style={{ marginTop: '20px', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: '10px', alignItems: 'center' }}>
                             <button

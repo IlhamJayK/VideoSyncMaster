@@ -28,7 +28,9 @@ export interface TranslationPanelProps {
     onEditEnd?: () => void;
     onUploadSubtitle?: (file: File) => void;
     hasVideo?: boolean;
-    ttsService?: 'indextts' | 'qwen';
+    ttsService?: string;
+    hasErrors?: boolean;
+    onRetryErrors?: () => void;
 }
 
 const TranslationPanel: React.FC<TranslationPanelProps> = ({
@@ -50,13 +52,17 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
     dubbingLoading,
     onReTranslate,
     loading,
+    onPlaySegment,
     playingAudioIndex,
+    playingVideoIndex,
     activeIndex,
     onEditStart,
     onEditEnd,
     onUploadSubtitle,
     hasVideo = false,
-    ttsService = 'indextts'
+    ttsService = 'indextts',
+    hasErrors,
+    onRetryErrors
 }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -167,7 +173,7 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
 
                 <div style={{ display: 'flex', gap: '5px', marginBottom: '10px' }}>
                     <select
-                        style={{ flex: 1, padding: '8px', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+                        style={{ width: '90px', padding: '8px', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}
                         value={targetLang}
                         onChange={(e) => setTargetLang(e.target.value)}
                     >
@@ -191,6 +197,61 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
                             </>
                         )}
                     </select>
+
+                    <button
+                        onClick={async () => {
+                            if (translatedSegments.length === 0) return;
+                            const paths = translatedSegments.map(s => s.audioPath).filter(p => p);
+                            if (paths.length === 0) return;
+
+                            try {
+                                const result = await (window as any).ipcRenderer.invoke('run-backend', [
+                                    '--action', 'check_audio_files',
+                                    '--input', JSON.stringify(paths)
+                                ]);
+
+                                if (result && result.success && result.durations) {
+                                    setTranslatedSegments(prev => prev.map(seg => {
+                                        let newSeg = { ...seg };
+
+                                        // 1. Check verified files
+                                        if (seg.audioPath && result.durations[seg.audioPath] !== undefined) {
+                                            const dur = result.durations[seg.audioPath];
+                                            if (dur < 0) {
+                                                newSeg.audioStatus = 'error'; // File missing
+                                                newSeg.audioDuration = undefined;
+                                            } else {
+                                                newSeg.audioDuration = dur;
+                                                // Also re-validate duration -> error if too long
+                                                if (dur - (seg.end - seg.start) > 5.0) {
+                                                    newSeg.audioStatus = 'error';
+                                                }
+                                            }
+                                        }
+                                        // 2. Cleanup Zombie state (Ready but no path)
+                                        else if (seg.audioStatus === 'ready' && !seg.audioPath) {
+                                            newSeg.audioStatus = 'error';
+                                        }
+
+                                        return newSeg;
+                                    }));
+                                }
+                            } catch (e) { console.error(e); }
+                        }}
+                        className="btn"
+                        style={{
+                            padding: '8px 12px',
+                            background: 'transparent',
+                            color: 'var(--text-secondary)',
+                            border: '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: '5px',
+                            whiteSpace: 'nowrap'
+                        }}
+                        title="扫描本地文件并更新状态 (Check Files)"
+                    >
+                        🔍 校验状态
+                    </button>
                     <button
                         onClick={onTranslate}
                         disabled={segments.length === 0 || loading || dubbingLoading}
@@ -212,13 +273,38 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
                             padding: '8px 12px',
                             background: translatedSegments.length === 0 || dubbingLoading || loading ? '#4b5563' : '#10b981',
                             cursor: translatedSegments.length === 0 || dubbingLoading || loading ? 'not-allowed' : 'pointer',
-                            opacity: translatedSegments.length === 0 || dubbingLoading || loading ? 0.7 : 1
+                            opacity: translatedSegments.length === 0 || dubbingLoading || loading ? 0.7 : 1,
+                            height: 'fit-content'
                         }}
                     >
-                        {dubbingLoading ? '生成中...' : '生成配音'}
+                        {dubbingLoading ? '处理中...' : '生成全部配音'}
                     </button>
-                </div>
 
+                    {hasErrors && onRetryErrors && (
+                        <button
+                            disabled={dubbingLoading}
+                            onClick={onRetryErrors}
+                            title="重新生成所有失败(红叉)的片段"
+                            className="btn"
+                            style={{
+                                padding: '6px 12px',
+                                fontSize: '0.9em',
+                                background: dubbingLoading ? '#4b5563' : '#ef4444',
+                                cursor: dubbingLoading ? 'not-allowed' : 'pointer',
+                                opacity: dubbingLoading ? 0.7 : 1,
+                                whiteSpace: 'nowrap',
+                                height: 'fit-content',
+                                display: 'flex', alignItems: 'center', gap: '5px'
+                            }}
+                        >
+                            🔄 重试失败片段
+                        </button>
+                    )}
+
+
+
+
+                </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
@@ -263,6 +349,9 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
                                 cursor: 'pointer'
                             }}
                         >
+                            <div style={{ minWidth: '40px', fontSize: '0.85em', color: 'var(--text-secondary)', userSelect: 'none', textAlign: 'center' }}>
+                                {idx + 1}
+                            </div>
                             <div style={{ minWidth: '120px', fontSize: '0.85em', color: isActive ? 'var(--text-primary)' : 'var(--accent-color)' }}>
                                 {formatTimestamp(seg.start)} - {formatTimestamp(seg.end)}
                             </div>
@@ -287,8 +376,10 @@ const TranslationPanel: React.FC<TranslationPanelProps> = ({
                                     <div style={{ display: 'flex', gap: '5px', alignItems: 'center', flexShrink: 0 }}>
                                         {/* Status Icon */}
                                         {seg.audioStatus === 'generating' && <span title="生成中">⏳</span>}
-                                        {seg.audioStatus === 'error' && <span title="生成失败">❌</span>}
-                                        {seg.audioStatus === 'ready' && <span title="已生成">✅</span>}
+                                        {(seg.audioStatus === 'error' || (seg.audioDuration && (seg.audioDuration - (seg.end - seg.start) > 5.0))) && <span title="生成失败: 音频过长 (幻觉)">❌</span>}
+                                        {seg.audioStatus === 'ready' && !(seg.audioDuration && (seg.audioDuration - (seg.end - seg.start) > 5.0)) && <span title="已生成">✅</span>}
+
+
 
                                         {/* Play Button */}
                                         {seg.audioPath && (

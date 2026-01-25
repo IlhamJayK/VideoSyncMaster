@@ -81,7 +81,12 @@ const CompensationStrategy: React.FC<CompensationStrategyProps> = ({ themeMode }
                 {strategies.map((s) => (
                     <div
                         key={s.id}
-                        onClick={() => !s.disabled && setStrategy(s.id)}
+                        onClick={() => {
+                            if (!s.disabled) {
+                                setStrategy(s.id);
+                                localStorage.setItem('compensation_strategy', s.id);
+                            }
+                        }}
                         style={{
                             border: `2px solid ${strategy === s.id ? s.color : (isLightMode ? '#ddd' : '#444')}`,
                             borderRadius: '8px',

@@ -5,6 +5,7 @@ export interface Segment {
     end: number;
     text: string;
     audioPath?: string;
+    audioDuration?: number; // Duration of the generated audio in seconds
     audioStatus?: 'none' | 'generating' | 'ready' | 'error';
 }
 

@@ -55,6 +55,7 @@ function App() {
   const [mergeVersion, setMergeVersion] = useState(0);
   const [ttsService, setTtsService] = useState<'indextts' | 'qwen'>(() => (localStorage.getItem('ttsService') as any) || 'indextts');
   const [batchSize, setBatchSize] = useState(() => parseInt(localStorage.getItem('batchSize') || '1'));
+  const [feedback, setFeedback] = useState<{ title: string; message: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
     const checkEnv = async () => {
@@ -143,6 +144,22 @@ function App() {
   }, [leftWidth, timelineWidth]); // Re-run if they change externally (though we want to avoid loop, this logic only shrinks if OVER limit)
 
 
+  // Pause media when switching views
+  useEffect(() => {
+    if (currentView !== 'home') {
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+      setPlayingVideoIndex(null);
+
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      setPlayingAudioIndex(null);
+    }
+  }, [currentView]);
+
+
 
   // Background Mode
   const [bgMode, setBgMode] = useState<'gradient' | 'dark'>(() => (localStorage.getItem('bgMode') as 'gradient' | 'dark') || 'gradient');
@@ -195,10 +212,27 @@ function App() {
             // Handle Audio Update
             if (data.audio_path !== undefined) {
               const isSuccess = data.success === true;
+              let status: 'ready' | 'error' = isSuccess ? 'ready' : 'error';
+
+              // Duration Check for Hallucinations
+              if (isSuccess && data.duration) {
+                const seg = newSegs[data.index];
+                const expectedDur = seg.end - seg.start;
+                if (data.duration - expectedDur > 5.0) {
+                  status = 'error';
+                }
+              }
+
+              // Safety check: if success but no path, it's an error
+              if (isSuccess && !data.audio_path) {
+                status = 'error';
+              }
+
               newSegs[data.index] = {
                 ...newSegs[data.index],
                 audioPath: data.audio_path,
-                audioStatus: isSuccess ? 'ready' : 'error'
+                audioStatus: status,
+                audioDuration: data.duration
               }
             }
             // Handle Text Update (Real-time translation)
@@ -338,6 +372,7 @@ function App() {
     }
 
     setLoading(true);
+    abortRef.current = false; // Reset abort flag
     setIsIndeterminate(true);
     setProgress(0);
     setStatus('正在识别字幕...');
@@ -412,11 +447,29 @@ function App() {
     }
   };
 
+  // Check for errors to enable retry button
+  const hasErrors = translatedSegments.some(s => s.audioStatus === 'error');
+
+  const handleRetryErrors = async () => {
+    const errorSegments = translatedSegments
+      .map((seg, idx) => ({ ...seg, original_index: idx }))
+      .filter(seg => seg.audioStatus === 'error');
+
+    if (errorSegments.length === 0) {
+      setStatus('没有找到需要重试的失败片段');
+      return;
+    }
+
+    setStatus(`正在重试 ${errorSegments.length} 个失败片段...`);
+    await handleGenerateAllDubbing(errorSegments);
+  };
+
   const handleTranslate = async (overrideSegments?: Segment[]): Promise<Segment[] | null> => {
     const segsToUse = overrideSegments || segments;
     if (segsToUse.length === 0) return null;
 
     setLoading(true);
+    abortRef.current = false; // Reset abort flag
     setIsIndeterminate(true);
     setProgress(0);
     setStatus(`正在翻译 ${segsToUse.length} 个片段到 ${targetLang}...`);
@@ -483,12 +536,31 @@ function App() {
 
       const audioPath = `${segmentsDir}\\segment_${index}.wav`;
 
-      // Read advanced TTS config
-      const ttsTemp = localStorage.getItem('tts_temperature') || '0.8';
-      const ttsTopP = localStorage.getItem('tts_top_p') || '0.8';
-      const ttsRepPen = localStorage.getItem('tts_repetition_penalty') || '10.0';
-      const ttsCfg = localStorage.getItem('tts_cfg_scale') || '0.7';
-      const ttsRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
+      // Read IndexTTS config
+      const indexTemp = localStorage.getItem('tts_temperature') || '0.8';
+      const indexTopP = localStorage.getItem('tts_top_p') || '0.8';
+      const indexRepPen = localStorage.getItem('tts_repetition_penalty') || '10.0';
+      const indexCfg = localStorage.getItem('tts_cfg_scale') || '0.7';
+      const indexBeams = localStorage.getItem('tts_num_beams') || '1';
+      const indexTopK = localStorage.getItem('tts_top_k') || '5';
+      const indexLenPen = localStorage.getItem('tts_length_penalty') || '1.0';
+      const indexMaxMel = localStorage.getItem('tts_max_mel_tokens') || '2048';
+      const indexRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
+
+      // Read Qwen config (Minimal)
+      // Defaults are now handled backend-side or hardcoded if needed, but here we don't pass them.
+
+      const isQwen = ttsService === 'qwen';
+
+      const ttsTemp = isQwen ? '0.7' : indexTemp; // Dummy for Qwen
+      const ttsTopP = isQwen ? '0.8' : indexTopP;
+      const ttsRepPen = isQwen ? '1.0' : indexRepPen;
+      const ttsCfg = isQwen ? '1.0' : indexCfg;
+      const ttsBeams = isQwen ? '1' : indexBeams;
+      const ttsTopK = isQwen ? '50' : indexTopK;
+      const ttsLenPen = isQwen ? '1.0' : indexLenPen;
+      const ttsMaxMel = isQwen ? '2048' : indexMaxMel;
+      const ttsRefAudio = isQwen ? '' : indexRefAudio;
 
       const qwenMode = localStorage.getItem('qwen_mode') || 'clone';
       const qwenInstruct = localStorage.getItem('qwen_voice_instruction') || '';
@@ -512,7 +584,16 @@ function App() {
 
       // Determine effective language: Qwen Override > Target Lang
       let effectiveLang = targetLang;
-      if (ttsService === 'qwen' && qwenLang && qwenLang !== 'Auto') {
+      if (ttsService === 'qwen' && qwenLang) {
+        // Enforce Consistency Check here too
+        if (qwenLang !== targetLang) {
+          setFeedback({
+            title: "语言配置不一致 (Language Mismatch)",
+            message: `主页选择了 [${targetLang}]，但 Qwen TTS 设置为 [${qwenLang === 'Auto' ? 'Auto (无效配置)' : qwenLang}]。\n\n请前往 [TTS设置] 修改配置，或调整主页的目标语言。`,
+            type: 'error'
+          });
+          return;
+        }
         effectiveLang = qwenLang;
       }
 
@@ -527,7 +608,12 @@ function App() {
         '--temperature', ttsTemp,
         '--top_p', ttsTopP,
         '--repetition_penalty', ttsRepPen,
+        '--repetition_penalty', ttsRepPen,
         '--cfg_scale', ttsCfg,
+        '--num_beams', ttsBeams,
+        '--top_k', ttsTopK,
+        '--length_penalty', ttsLenPen,
+        '--max_new_tokens', ttsMaxMel,
         '--strategy', localStorage.getItem('compensation_strategy') || 'auto_speedup',
         '--tts_service', ttsService,
         '--json'
@@ -542,6 +628,10 @@ function App() {
         if (effectiveQwenMode === 'design' && qwenInstruct) {
           args.push('--voice_instruct', qwenInstruct);
         }
+        if (effectiveQwenMode === 'preset') {
+          const presetVoice = localStorage.getItem('qwen_preset_voice') || 'Vivian';
+          args.push('--preset_voice', presetVoice);
+        }
       } else {
         // IndexTTS fallback for explicit ref
         if (ttsRefAudio) args.push('--ref_audio', ttsRefAudio);
@@ -554,7 +644,19 @@ function App() {
       if (result && result.success) {
         setTranslatedSegments(prev => {
           const newSegs = [...prev];
-          newSegs[index] = { ...newSegs[index], audioPath: result.audio_path, audioStatus: 'ready' };
+          const seg_dur = newSegs[index].end - newSegs[index].start;
+          let status: 'ready' | 'error' = 'ready';
+          // Check for significant overflow (> 5s)
+          if (result.duration && (result.duration - seg_dur > 5.0)) {
+            status = 'error';
+          }
+
+          newSegs[index] = {
+            ...newSegs[index],
+            audioPath: result.audio_path,
+            audioStatus: status,
+            audioDuration: result.duration
+          };
           return newSegs;
         });
         setStatus(`第 ${index + 1} 句配音生成完成`);
@@ -579,7 +681,51 @@ function App() {
     const segsToUse = overrideSegments || translatedSegments;
     if (!originalVideoPath || segsToUse.length === 0) return null;
 
+    // Validation: Enforce Qwen Preview (Check BEFORE loading/status updates)
+    if (ttsService === 'qwen') {
+      const qwenMode = activeQwenMode; // Use state variable
+
+      // 1. Check Generic Preview (Basic Safety)
+      // Exception: Preset Mode AND Clone Mode do not require preview (User Request)
+      if (qwenMode !== 'preset' && qwenMode !== 'clone') {
+        const previewPath = localStorage.getItem(`qwen_preview_path_${qwenMode}`);
+        let fileExists = false;
+
+        if (previewPath) {
+          fileExists = await (window as any).ipcRenderer.invoke('check-file-exists', previewPath);
+        }
+
+        if (!previewPath || !fileExists) {
+          setFeedback({
+            title: "未进行预览测试 (Preview Missing)",
+            message: `您尚未进行语音合成测试，或预览文件已丢失。\n\n为确保效果，请先前往 [TTS设置] -> [Qwen3] 页面，点击【合成】按钮试听一次 (Preview Check)。\n\n确认试听成功后，系统才会允许进行批量生成。`,
+            type: 'error'
+          });
+          return null;
+        }
+      }
+
+      // 2. Design Mode Specific Check (Critical for voice design)
+      if (qwenMode === 'design') {
+        const designRef = localStorage.getItem('qwen_design_ref_audio');
+        let designExists = false;
+        if (designRef) {
+          designExists = await (window as any).ipcRenderer.invoke('check-file-exists', designRef);
+        }
+
+        if (!designRef || !designExists) {
+          setFeedback({
+            title: "未生成设计音色 (Missing Designed Voice)",
+            message: "您选择了 [声音设计] 模式，但尚未生成有效的参考音色。\n\n请前往 [TTS设置] 输入提示词并点击【合成】，生成满意的音色后（会自动锁定），再进行批量克隆。",
+            type: 'error'
+          });
+          return null;
+        }
+      }
+    }
+
     setDubbingLoading(true);
+    abortRef.current = false; // Reset abort flag
     setIsIndeterminate(true); // Show animation while preparing/extracting refs
     setProgress(0);
     setStatus("正在批量生成配音 (模型加载中可能较慢)...");
@@ -597,27 +743,51 @@ function App() {
       const tempJsonPath = `${segmentsDir}\\batch_tasks.json`;
 
       // Prepare segments with pre-defined output paths to help backend
-      const segmentsToProcess = segsToUse.map((seg, idx) => ({
-        ...seg,
-        // Ensure audioPath is set desired location if not already
-        audioPath: seg.audioPath || `${segmentsDir}\\segment_${idx}.wav`
-      }));
+      const segmentsToProcess = segsToUse.map((seg, idx) => {
+        // Use intrinsic original_index if available (from partial retry), otherwise use loop idx
+        const effectiveIndex = (seg as any).original_index !== undefined ? (seg as any).original_index : idx;
+        return {
+          ...seg,
+          original_index: effectiveIndex,
+          // Ensure audioPath is set desired location if not already
+          audioPath: seg.audioPath || `${segmentsDir}\\segment_${effectiveIndex}.wav`
+        };
+      });
 
       await (window as any).ipcRenderer.invoke('save-file', tempJsonPath, JSON.stringify(segmentsToProcess));
 
       if (abortRef.current) return null;
 
-      // Read advanced TTS config
+      // Read IndexTTS config (Needed for Fallback)
       const ttsTemp = localStorage.getItem('tts_temperature') || '0.8';
       const ttsTopP = localStorage.getItem('tts_top_p') || '0.8';
       const ttsRepPen = localStorage.getItem('tts_repetition_penalty') || '10.0';
       const ttsCfg = localStorage.getItem('tts_cfg_scale') || '0.7';
-      const ttsRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
+      const ttsBeams = localStorage.getItem('tts_num_beams') || '1';
+      const ttsTopK = localStorage.getItem('tts_top_k') || '5';
+      const ttsLenPen = localStorage.getItem('tts_length_penalty') || '1.0';
+      const ttsMaxMel = localStorage.getItem('tts_max_mel_tokens') || '2048';
+      const indexRefAudio = localStorage.getItem('tts_ref_audio_path') || '';
 
-      const qwenMode = localStorage.getItem('qwen_mode') || 'clone';
+      const isQwen = ttsService === 'qwen';
+      const ttsRefAudio = isQwen ? '' : indexRefAudio;
+
+      const qwenMode = activeQwenMode; // Use component state which is sync with localStorage
       const qwenInstruct = localStorage.getItem('qwen_voice_instruction') || '';
-      const qwenLang = localStorage.getItem('qwen_language');
-      const qwenModelSize = localStorage.getItem('qwen_model_size') || '1.7B';
+      const qwenLang = localStorage.getItem('qwen_language'); // Important
+
+      // Language Consistency Check (User Request)
+      // Qwen needs strict language matching to avoid hallucinations or "Auto" ambiguity
+      if (isQwen && qwenLang && qwenLang !== targetLang) {
+        setFeedback({
+          title: "语言配置不一致 (Language Mismatch)",
+          message: `主页选择了 [${targetLang}]，但 Qwen TTS 设置为 [${qwenLang === 'Auto' ? 'Auto (无效配置)' : qwenLang}]。\n\n系统要求两者必须一致 (Must Match)。\n\n请前往 [TTS设置] 修改配置，或调整主页的目标语言。`,
+          type: 'error'
+        });
+        return null;
+      }
+
+      const qwenModelSize = "1.7B";
 
       // Design then Clone Workflow
       const qwenDesignRef = localStorage.getItem('qwen_design_ref_audio');
@@ -639,20 +809,37 @@ function App() {
         effectiveLang = qwenLang;
       }
 
+      let effectiveBatchSize = batchSize;
+      // Only force sequential for strict "Clone" mode where references vary per segment
+      // "Design" mode uses a fixed global reference (even if effective mode is clone), so it CAN be batched.
+      if (ttsService === 'qwen' && qwenMode === 'clone') {
+        effectiveBatchSize = 1;
+      }
+
       const args = [
         '--action', 'generate_batch_tts',
         '--input', originalVideoPath,
         '--ref', tempJsonPath,
         '--lang', effectiveLang,
-        '--temperature', ttsTemp,
-        '--top_p', ttsTopP,
-        '--repetition_penalty', ttsRepPen,
-        '--cfg_scale', ttsCfg,
         '--strategy', localStorage.getItem('compensation_strategy') || 'auto_speedup', // Pass strategy
         '--tts_service', ttsService,
-        '--batch_size', batchSize.toString(),
+        '--batch_size', effectiveBatchSize.toString(),
         '--json'
       ];
+
+      // Only push advanced params if NOT Qwen
+      if (ttsService !== 'qwen') {
+        args.push(
+          '--temperature', ttsTemp,
+          '--top_p', ttsTopP,
+          '--repetition_penalty', ttsRepPen,
+          '--cfg_scale', ttsCfg,
+          '--num_beams', ttsBeams,
+          '--top_k', ttsTopK,
+          '--length_penalty', ttsLenPen,
+          '--max_new_tokens', ttsMaxMel
+        );
+      }
 
       if (ttsService === 'qwen') {
         if (qwenRefAudio) args.push('--ref_audio', qwenRefAudio);
@@ -662,6 +849,10 @@ function App() {
         args.push('--qwen_model_size', qwenModelSize);
         if (effectiveQwenMode === 'design' && qwenInstruct) {
           args.push('--voice_instruct', qwenInstruct);
+        }
+        if (effectiveQwenMode === 'preset') {
+          const presetVoice = localStorage.getItem('qwen_preset_voice') || 'Vivian';
+          args.push('--preset_voice', presetVoice);
         }
       } else {
         if (ttsRefAudio) args.push('--ref_audio', ttsRefAudio);
@@ -674,30 +865,51 @@ function App() {
       if (abortRef.current) return null;
 
       if (result && result.success && Array.isArray(result.results)) {
-        // Construct new segments based on results
-        const newSegments = [...segmentsToProcess];
 
-        result.results.forEach((res: any) => {
-          if (newSegments[res.index]) {
-            if (res.success) {
-              newSegments[res.index] = {
-                ...newSegments[res.index],
-                audioPath: res.audio_path,
-                audioStatus: 'ready'
-              };
-            } else {
-              newSegments[res.index] = {
-                ...newSegments[res.index],
-                audioStatus: 'error'
-              };
-              console.error(`Segment ${res.index} failed:`, res.error);
+        // Merge results back into the FULL list (represented by current state 'prev')
+        // We use 'prev' in setter to ensure we have the latest global state
+        setTranslatedSegments(prev => {
+          const newSegments = [...prev];
+
+          result.results.forEach((res: any) => {
+            // res.index is the original_index (validated in backend)
+            if (newSegments[res.index]) {
+              if (res.success) {
+                const seg_dur = newSegments[res.index].end - newSegments[res.index].start;
+                let status: 'ready' | 'error' = 'ready';
+
+                // Check for significant overflow (> 5s)
+                if (res.duration && (res.duration - seg_dur > 5.0)) {
+                  status = 'error';
+                }
+
+                if (!res.audio_path) {
+                  status = 'error';
+                }
+
+                newSegments[res.index] = {
+                  ...newSegments[res.index],
+                  audioPath: res.audio_path,
+                  audioStatus: status,
+                  audioDuration: res.duration
+                };
+              } else {
+                newSegments[res.index] = {
+                  ...newSegments[res.index],
+                  audioStatus: 'error'
+                };
+                console.error(`Segment ${res.index} failed:`, res.error);
+              }
             }
-          }
+          });
+          return newSegments;
         });
 
-        setTranslatedSegments(newSegments);
         setStatus("批量配音生成完成");
-        return newSegments;
+        // Return mostly for compatibility, though return value might be stale if we rely on setter
+        // Actually the return type is Promise<Segment[]>, maybe just return null or what we have.
+        // The calling function handleRetryErrors doesn't use the return value.
+        return null;
       } else {
         setStatus(`批量配音失败: ${result?.error || 'Unknown'}`);
         return null;
@@ -715,7 +927,7 @@ function App() {
     }
   };
 
-  const handlePlaySegmentAudio = (index: number, audioPath: string) => {
+  const handlePlaySegmentAudio = async (index: number, audioPath: string) => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
 
@@ -727,15 +939,21 @@ function App() {
     }
 
     // Play new segment
-    const url = `file:///${audioPath.replace(/\\/g, '/')}?t=${Date.now()}`;
-    audioEl.src = url;
-    audioEl.play().catch(e => {
-      console.error("Audio play failed", e);
-      setPlayingAudioIndex(null);
-      setStatus("播放失败: " + (e.message || "未知错误"));
-    });
+    try {
+      // Use the robust URL converter from main process
+      const url = await (window as any).ipcRenderer.invoke('get-file-url', audioPath);
+      audioEl.src = `${url}?t=${Date.now()}`;
+      audioEl.play().catch(e => {
+        console.error("Audio play failed", e);
+        setPlayingAudioIndex(null);
+        setStatus("播放失败: " + (e.message || "未知错误"));
+      });
 
-    setPlayingAudioIndex(index);
+      setPlayingAudioIndex(index);
+    } catch (err: any) {
+      console.error("Failed to get audio URL", err);
+      setStatus("加载音频失败: " + err.message);
+    }
   };
 
 
@@ -755,6 +973,7 @@ function App() {
     }
 
     setDubbingLoading(true);
+    abortRef.current = false; // Reset abort flag
     setIsIndeterminate(true);
     setProgress(100); // Indeterminate bar
     setStatus("正在合并视频...");
@@ -1133,6 +1352,30 @@ function App() {
         confirmColor={repairResult?.success ? "#22c55e" : "#ef4444"}
       />
 
+      <ConfirmDialog
+        isOpen={!!feedback}
+        title={feedback?.title || ''}
+        message={feedback?.message || ''}
+        onConfirm={() => {
+          // Auto redirect if error related to preview or language mismatch
+          if (feedback?.type === 'error' && (
+            feedback.message.includes('预览') ||
+            feedback.message.includes('Preview') ||
+            feedback.message.includes('设计') ||
+            feedback.message.includes('语言') ||
+            feedback.message.includes('Language')
+          )) {
+            setCurrentView('tts');
+          }
+          setFeedback(null);
+        }}
+        isLightMode={bgMode === 'gradient'}
+        confirmText={feedback?.type === 'error' ? "前往设置" : "确定"}
+        confirmColor={feedback?.type === 'success' ? '#10b981' : '#3b82f6'}
+        onCancel={() => setFeedback(null)}
+        cancelText="取消"
+      />
+
       {/* Smooth Background Transition Layer (z-index 0) */}
 
 
@@ -1225,7 +1468,7 @@ function App() {
           </span>
           <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.2)', margin: '0 4px' }}></div>
 
-          {ttsService === 'qwen' && (
+          {ttsService === 'qwen' && activeQwenMode !== 'clone' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9em' }}>TTS并发数量:</span>
               <input
@@ -1580,6 +1823,8 @@ function App() {
               onEditStart={setEditingIndex}
               onEditEnd={() => setEditingIndex(null)}
               ttsService={ttsService}
+              hasErrors={hasErrors}
+              onRetryErrors={handleRetryErrors}
             />
           </div>
         </div>
@@ -1633,16 +1878,7 @@ function App() {
               这是为了让 Qwen3-TTS 与原有模型并存所必需的操作。这可能需要 2-5 分钟（取决于您的网络），请勿关闭软件。
             </p>
 
-            <div style={{
-              marginTop: '30px',
-              padding: '10px 20px',
-              background: 'rgba(255,255,255,0.1)',
-              borderRadius: '20px',
-              color: '#818cf8',
-              fontWeight: 500
-            }}>
-              安装完成后将自动开始合成
-            </div>
+
           </div>
           <style>{`
             @keyframes spin { to { transform: rotate(360deg); } }

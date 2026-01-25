@@ -23,8 +23,7 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
     const [voiceInstruction, setVoiceInstruction] = useState<string>(''); // For Design (e.g. "Sweet female")
     const [presetVoice, setPresetVoice] = useState<string>('Vivian'); // For Preset Mode
     const [refText, setRefText] = useState<string>(''); // For Clone (Transcript)
-    const [language, setLanguage] = useState<string>('Auto'); // Target Language
-    const [modelSize, setModelSize] = useState<string>('1.7B'); // Default to 1.7B
+    const [language, setLanguage] = useState<string>('Chinese'); // Target Language
 
     // Preview States
     const [previewTexts, setPreviewTexts] = useState<Record<'clone' | 'design' | 'preset', string>>({
@@ -42,9 +41,6 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
     const [isPlaying, setIsPlaying] = useState<boolean>(false);
     const [audioObj, setAudioObj] = useState<HTMLAudioElement | null>(null);
 
-    const [temperature, setTemperature] = useState<number>(0.7);
-    const [topP, setTopP] = useState<number>(0.8);
-    const [repetitionPenalty, setRepetitionPenalty] = useState<number>(1.0);
     const [hasDesignRef, setHasDesignRef] = useState<boolean>(false);
 
     // Load config
@@ -66,23 +62,17 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
         const storedInstruct = localStorage.getItem('qwen_voice_instruction');
         if (storedInstruct) setVoiceInstruction(storedInstruct);
 
-        const storedTemp = localStorage.getItem('qwen_temperature');
-        if (storedTemp) setTemperature(parseFloat(storedTemp));
-
-        const storedTopP = localStorage.getItem('qwen_top_p');
-        if (storedTopP) setTopP(parseFloat(storedTopP));
-
-        const storedRepPen = localStorage.getItem('qwen_repetition_penalty');
-        if (storedRepPen) setRepetitionPenalty(parseFloat(storedRepPen));
-
         const storedPreset = localStorage.getItem('qwen_preset_voice');
         if (storedPreset) setPresetVoice(storedPreset);
 
         const storedLang = localStorage.getItem('qwen_language');
-        if (storedLang) setLanguage(storedLang);
-
-        const storedModelSize = localStorage.getItem('qwen_model_size');
-        if (storedModelSize) setModelSize(storedModelSize);
+        if (storedLang && storedLang !== 'Auto') {
+            setLanguage(storedLang);
+        } else if (storedLang === 'Auto') {
+            // Migration: Auto is deprecated, default to Chinese
+            setLanguage('Chinese');
+            localStorage.setItem('qwen_language', 'Chinese'); // Auto-fix storage immediately
+        }
 
         // Load mode-specific audio paths
         const modes: ('clone' | 'design' | 'preset')[] = ['clone', 'design', 'preset'];
@@ -107,12 +97,8 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
         localStorage.setItem('qwen_ref_audio_path', refAudioPath);
         localStorage.setItem('qwen_ref_text', refText);
         localStorage.setItem('qwen_voice_instruction', voiceInstruction);
-        localStorage.setItem('qwen_temperature', temperature.toString());
-        localStorage.setItem('qwen_top_p', topP.toString());
-        localStorage.setItem('qwen_repetition_penalty', repetitionPenalty.toString());
         localStorage.setItem('qwen_preset_voice', presetVoice);
         localStorage.setItem('qwen_language', language);
-        localStorage.setItem('qwen_model_size', modelSize);
 
         setFeedback({ title: '保存成功', message: 'Qwen3 配置已保存！', type: 'success' });
     };
@@ -124,6 +110,12 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
         if (mode === 'clone' && !refAudioPath) {
             setFeedback({ title: '缺少参考音频', message: '请先选择参考音频！(Reference Audio is required for Clone mode)', type: 'error' });
             return;
+        }
+
+        // Stop any current playback
+        if (isPlaying && audioObj) {
+            audioObj.pause();
+            setIsPlaying(false);
         }
 
         setPreviewLoading(true);
@@ -144,15 +136,14 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
                 '--json',
                 '--tts_service', 'qwen',
                 '--qwen_mode', mode,
-                '--lang', language,
-                '--qwen_model_size', modelSize,
-                '--temperature', temperature.toString(),
-                '--top_p', topP.toString(),
-                '--repetition_penalty', repetitionPenalty.toString(),
+                '--lang', language
             ];
 
             if (mode === 'clone' && refAudioPath) {
                 args.push('--ref', refAudioPath);
+                if (refText) {
+                    args.push('--qwen_ref_text', refText);
+                }
             }
             if (mode === 'design' && voiceInstruction) {
                 args.push('--voice_instruct', voiceInstruction);
@@ -210,6 +201,16 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
         };
     };
 
+    // Cleanup audio on unmount
+    useEffect(() => {
+        return () => {
+            if (audioObj) {
+                audioObj.pause();
+                audioObj.currentTime = 0;
+            }
+        };
+    }, [audioObj]);
+
     const handleClearDesign = () => {
         localStorage.removeItem('qwen_design_ref_audio');
         localStorage.removeItem('qwen_design_ref_text');
@@ -230,25 +231,6 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
             console.error(e);
         }
     };
-
-    const SliderControl = ({ label, value, setValue, min, max, step, desc }: any) => (
-        <div style={{ marginBottom: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <label style={{ fontWeight: 'bold' }}>{label}</label>
-                <span style={{ fontWeight: 'bold', color: '#6366f1' }}>{value}</span>
-            </div>
-            <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={value}
-                onChange={(e) => setValue(parseFloat(e.target.value))}
-                style={{ width: '100%', cursor: 'pointer' }}
-            />
-            {desc && <p style={{ fontSize: '0.8em', color: isLightMode ? '#666' : '#aaa', margin: '5px 0 0 0' }}>{desc}</p>}
-        </div>
-    );
 
     return (
         <div style={{ padding: '0px', color: isLightMode ? '#333' : '#fff' }}>
@@ -324,6 +306,57 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
                             <option value="Sohee">Sohee - 推荐韩文</option>
                         </select>
                     </div>
+                    <div style={{ marginBottom: '20px' }}>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>预览测试 (Preview)</label>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <textarea
+                                value={previewTexts.preset}
+                                onChange={(e) => setPreviewTexts(prev => ({ ...prev, preset: e.target.value }))}
+                                placeholder="输入要试听的文本..."
+                                className="input-field"
+                                style={{
+                                    flex: 1,
+                                    height: '50px',
+                                    resize: 'none',
+                                    cursor: 'text',
+                                    caretColor: isLightMode ? '#000' : '#fff'
+                                }}
+                            />
+                            <button
+                                onClick={handleGeneratePreview}
+                                disabled={previewLoading}
+                                style={{
+                                    padding: '0 15px',
+                                    background: previewLoading ? '#ccc' : '#8b5cf6',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: previewLoading ? 'not-allowed' : 'pointer',
+                                    fontWeight: 'bold',
+                                    marginRight: '5px'
+                                }}
+                            >
+                                {previewLoading ? '⏳ 生成中...' : '🛠️ 合成'}
+                            </button>
+                            <button
+                                onClick={handlePlayPreview}
+                                disabled={!generatedPaths.preset}
+                                style={{
+                                    padding: '0 15px',
+                                    background: !generatedPaths.preset ? '#555' : (isPlaying ? '#e11d48' : '#10b981'),
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: !generatedPaths.preset ? 'not-allowed' : 'pointer',
+                                    fontWeight: 'bold',
+                                    minWidth: '80px',
+                                    transition: 'background 0.2s'
+                                }}
+                            >
+                                {isPlaying ? '⏹ 停止' : '▶ 播放'}
+                            </button>
+                        </div>
+                    </div>
                 </>
             ) : mode === 'clone' ? (
                 <>
@@ -349,6 +382,30 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
                                 📂
                             </button>
                         </div>
+                        <p style={{ fontSize: '0.8em', color: isLightMode ? '#666' : '#aaa', marginTop: '5px' }}>
+                            {refAudioPath ? '✅ 已选择自定义音频' : 'ℹ️ 将自动截取原视频片段声音'}
+                        </p>
+                    </div>
+
+                    <div style={{ marginBottom: '20px' }}>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>参考音频文本 (Reference Text)</label>
+                        <p style={{ fontSize: '0.9em', color: isLightMode ? '#666' : '#aaa', marginBottom: '5px' }}>
+                            (强烈推荐) 输入音频内容的字幕以获得最佳相似度。<b>留空将使用 X-Vector 模式 (仅参考音色，相似度较低)。</b>
+                        </p>
+                        <textarea
+                            value={refText}
+                            onChange={(e) => setRefText(e.target.value)}
+                            placeholder="请输入参考音频中的逐字内容..."
+                            className="input-field"
+                            style={{
+                                width: '100%',
+                                height: '60px', // Slightly taller for transcript
+                                resize: 'none',
+                                cursor: 'text',
+                                caretColor: isLightMode ? '#000' : '#fff',
+                                boxSizing: 'border-box'
+                            }}
+                        />
                     </div>
 
                     <div style={{ marginBottom: '20px' }}>
@@ -406,7 +463,7 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
                         </div>
                     </div>
                 </>
-            ) : (
+            ) : ( // This is for mode === 'design'
                 <>
                     <div style={{ marginBottom: '20px' }}>
                         <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>音色描述指令 (Voice Instruction)</label>
@@ -513,85 +570,6 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
                 </>
             )}
 
-            {/* Common Preview Area for Preset and Clone/Design */}
-            {(mode === 'preset') && (
-                <div style={{ marginBottom: '20px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>预览测试 (Preview)</label>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                        <textarea
-                            value={previewTexts.preset}
-                            onChange={(e) => setPreviewTexts(prev => ({ ...prev, preset: e.target.value }))}
-                            placeholder="输入要试听的文本..."
-                            className="input-field"
-                            style={{
-                                flex: 1,
-                                height: '50px',
-                                resize: 'none',
-                                cursor: 'text',
-                                caretColor: isLightMode ? '#000' : '#fff'
-                            }}
-                        />
-                        <button
-                            onClick={handleGeneratePreview}
-                            disabled={previewLoading}
-                            style={{
-                                padding: '0 15px',
-                                background: previewLoading ? '#ccc' : '#8b5cf6',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: previewLoading ? 'not-allowed' : 'pointer',
-                                fontWeight: 'bold',
-                                marginRight: '5px'
-                            }}
-                        >
-                            {previewLoading ? '⏳ 生成中...' : '🛠️ 合成'}
-                        </button>
-                        <button
-                            onClick={handlePlayPreview}
-                            disabled={!generatedPaths.preset}
-                            style={{
-                                padding: '0 15px',
-                                background: !generatedPaths.preset ? '#555' : (isPlaying ? '#e11d48' : '#10b981'),
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: !generatedPaths.preset ? 'not-allowed' : 'pointer',
-                                fontWeight: 'bold',
-                                minWidth: '80px',
-                                transition: 'background 0.2s'
-                            }}
-                        >
-                            {isPlaying ? '⏹ 停止' : '▶ 播放'}
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {(mode === 'clone' || mode === 'design') && null /* Already handled inside conditional blocks, just keeping structure valid */}
-
-            <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>模型大小 (Model Size)</label>
-                <select
-                    value={modelSize}
-                    onChange={(e) => setModelSize(e.target.value)}
-                    className="input-field"
-                    style={{
-                        width: '100%',
-                        padding: '8px',
-                        background: isLightMode ? '#fff' : '#333',
-                        color: isLightMode ? '#000' : '#fff',
-                        borderColor: isLightMode ? '#ccc' : '#555'
-                    }}
-                >
-                    <option value="1.7B">1.7B (推荐, 效果更好)</option>
-                    <option value="0.6B">0.6B (更快, 省显存)</option>
-                </select>
-                <p style={{ fontSize: '0.8em', color: isLightMode ? '#666' : '#aaa', marginTop: '5px' }}>
-                    选择模型大小。1.7B 效果更好但需要更多显存；0.6B 速度更快。
-                </p>
-            </div>
-
             <div style={{ marginBottom: '20px' }}>
                 <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>目标语言 (Target Language)</label>
                 <select
@@ -624,23 +602,12 @@ const QwenTTSConfig: React.FC<QwenTTSConfigProps> = ({ themeMode, isActive, onAc
 
             <div style={{ borderTop: isLightMode ? '1px solid #eee' : '1px solid #444', margin: '20px 0' }}></div>
 
-            <SliderControl
-                label="Temperature (随机度)"
-                value={temperature}
-                setValue={setTemperature}
-                min={0.1} max={1.5} step={0.1}
-                desc="控制生成的随机性。较高值(>0.8)使声音更有情感变化但可能不稳定；较低值(<0.5)使声音更稳定单调。"
-            />
+            {/* Removed Advanced Parameters (Temperature, Top P, etc.) as requested to prevent model interference */}
+            <p style={{ fontSize: '0.9em', color: isLightMode ? '#666' : '#aaa', fontStyle: 'italic', textAlign: 'center' }}>
+                (高级参数已由系统自动托管以确保最佳生成稳定性)
+            </p>
 
-            <SliderControl
-                label="Top P (采样范围)"
-                value={topP}
-                setValue={setTopP}
-                min={0.1} max={1.0} step={0.05}
-                desc="控制词汇选择的多样性范围。较低值会过滤掉低概率的结果，使生成更聚焦。"
-            />
-
-            <div style={{ textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <div style={{ textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
                 <button
                     onClick={() => {
                         handleSave();

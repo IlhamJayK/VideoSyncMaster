@@ -66,7 +66,7 @@ class BcutASR(BaseASR):
             }
         )
 
-        resp = requests.post(API_REQ_UPLOAD, data=payload, headers=self.headers)
+        resp = requests.post(API_REQ_UPLOAD, data=payload, headers=self.headers, timeout=30)
         resp.raise_for_status()
         resp = resp.json()
         resp_data = resp["data"]
@@ -98,6 +98,7 @@ class BcutASR(BaseASR):
                 self.__upload_urls[clip],
                 data=self.file_binary[start_range:end_range],
                 headers=self.headers,
+                timeout=120
             )
             resp.raise_for_status()
             etag = resp.headers.get("Etag")
@@ -115,7 +116,7 @@ class BcutASR(BaseASR):
                 "model_id": "8",
             }
         )
-        resp = requests.post(API_COMMIT_UPLOAD, data=data, headers=self.headers)
+        resp = requests.post(API_COMMIT_UPLOAD, data=data, headers=self.headers, timeout=30)
         resp.raise_for_status()
         resp = resp.json()
         self.__download_url = resp["data"]["download_url"]
@@ -126,6 +127,7 @@ class BcutASR(BaseASR):
             API_CREATE_TASK,
             json={"resource": self.__download_url, "model_id": "8"},
             headers=self.headers,
+            timeout=30
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -138,6 +140,7 @@ class BcutASR(BaseASR):
             API_QUERY_RESULT,
             params={"model_id": 7, "task_id": task_id or self.task_id},
             headers=self.headers,
+            timeout=30
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -156,27 +159,30 @@ class BcutASR(BaseASR):
         if callback is None:
             callback = _default_callback
 
-        callback(*ASRStatus.UPLOADING.callback_tuple())
-        self.upload()
+        try:
+            callback(*ASRStatus.UPLOADING.callback_tuple())
+            self.upload()
 
-        callback(*ASRStatus.CREATING_TASK.callback_tuple())
-        self.create_task()
+            callback(*ASRStatus.CREATING_TASK.callback_tuple())
+            self.create_task()
 
-        callback(*ASRStatus.TRANSCRIBING.callback_tuple())
+            callback(*ASRStatus.TRANSCRIBING.callback_tuple())
 
-        # Poll task status until complete
-        task_resp = None
-        for _ in range(500):
-            task_resp = self.result()
-            if task_resp["state"] == 4:
-                break
-            time.sleep(1)
+            # Poll task status until complete
+            task_resp = None
+            for _ in range(500):
+                task_resp = self.result()
+                if task_resp["state"] == 4:
+                    break
+                time.sleep(1)
 
-        if task_resp is None or task_resp["state"] != 4:
-            raise RuntimeError("ASR task failed or timeout")
+            if task_resp is None or task_resp["state"] != 4:
+                raise RuntimeError("ASR task failed or timeout")
 
-        callback(*ASRStatus.COMPLETED.callback_tuple())
-        return json.loads(task_resp["result"])
+            callback(*ASRStatus.COMPLETED.callback_tuple())
+            return json.loads(task_resp["result"])
+        finally:
+            self.session.close()
 
     def _make_segments(self, resp_data: dict) -> List[ASRDataSeg]:
         if self.need_word_time_stamp:

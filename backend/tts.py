@@ -4,10 +4,8 @@ import torch
 import soundfile as sf
 import traceback
 import json
+import subprocess
 
-
-# Import local indextts package from backend/indextts
-# Ensure backend directory is in path (it usually is if running from backend)
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
@@ -32,16 +30,51 @@ else:
     
 DEFAULT_CONFIG_PATH = os.path.join(DEFAULT_MODEL_DIR, "config.yaml")
 
+def trim_silence(audio_path, output_path=None):
+    """
+    Trim silence from the beginning and end of the audio file using FFmpeg.
+    """
+    if not output_path:
+        output_path = audio_path
+        
+    temp_path = audio_path.replace('.wav', '_trimmed_temp.wav')
+    
+    try:
+
+        filter_str = "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB,areverse"
+        
+        cmd = [
+            'ffmpeg', '-y', '-i', audio_path,
+            '-af', filter_str,
+            temp_path
+        ]
+        
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        if os.path.exists(temp_path) and os.path.getsize(temp_path) > 1000: # >1KB
+            if os.path.exists(output_path) and output_path != audio_path:
+                os.remove(output_path)
+            # Move temp to output
+            if output_path == audio_path:
+                os.remove(audio_path)
+                os.rename(temp_path, audio_path)
+            else:
+                os.rename(temp_path, output_path)
+            return True
+        else:
+            print(f"[Trim] Warning: Trim resulted in empty file, keeping original. {audio_path}")
+            if os.path.exists(temp_path): os.remove(temp_path)
+            return False
+            
+    except Exception as e:
+        print(f"[Trim] Error trimming silence: {e}")
+        if os.path.exists(temp_path): 
+            try: os.remove(temp_path)
+            except: pass
+        return False
+
+
 def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None, language="English", **kwargs):
-    """
-    Run Voice Cloning TTS.
-    :param text: Text to speak.
-    :param ref_audio_path: Path to reference audio (3-10s).
-    :param output_path: Where to save the result.
-    :param model_dir: Path to model checkpoints.
-    :param config_path: Path to config.yaml.
-    :param language: Target language (Chinese, English, Japanese, Korean)
-    """
     if IndexTTS2 is None:
         print("IndexTTS2 not available.")
         return False
@@ -56,31 +89,40 @@ def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None,
     
     print(f"TTS Text with tag: {text}")
     
+
+    
     try:
-        # Initialize the model
-        # Note: adjust use_fp16/use_cuda_kernel/use_deepspeed based on environment.
-        # Starting with conservative defaults (False) for stability. User can enable later.
         tts = IndexTTS2(
             cfg_path=config_path, 
             model_dir=model_dir, 
-            use_fp16=False, 
+            use_fp16=True, 
             use_cuda_kernel=False, 
             use_deepspeed=False
         )
         
         print(f"Synthesizing text: '{text}' using ref: {ref_audio_path}")
         
-        # infer returns None, saves to output_path. 
-        # But we should check if output_path is absolute or relative.
-        # It's better to ensure directory exists.
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         
+        # Filter out arguments not supported by IndexTTS/HF Generate
+        ignore_keys = {'batch_size', 'qwen_mode', 'voice_instruct', 'preset_voice', 'qwen_model_size', 'qwen_ref_text', 'tts_service', 'action', 'json', 'cfg_scale', 'num_beams', 'length_penalty', 'max_new_tokens'}
+        valid_kwargs = {k: v for k, v in kwargs.items() if k not in ignore_keys}
+        
+        # Add IndexTTS specific defaults (User specified to remove subtalker_ prefix)
+        if 'do_sample' not in valid_kwargs: valid_kwargs['do_sample'] = True
+        if 'top_k' not in valid_kwargs: valid_kwargs['top_k'] = 50
+        if 'top_p' not in valid_kwargs: valid_kwargs['top_p'] = 1.0
+        if 'temperature' not in valid_kwargs: valid_kwargs['temperature'] = 0.9
+
+        # Explicitly pass advanced params if present in kwargs
+        # (Though they are auto-passed by kwargs filter, we just ensure they are valid)
+
         tts.infer(
             spk_audio_prompt=ref_audio_path, 
             text=text, 
             output_path=output_path,
             verbose=True,
-            **kwargs
+            **valid_kwargs
         )
         
         print(f"TTS complete. Saved to {output_path}")
@@ -92,6 +134,7 @@ def run_tts(text, ref_audio_path, output_path, model_dir=None, config_path=None,
         traceback.print_exc()
         return False
 
+
 def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", **kwargs):
     """
     Run Batch Voice Cloning TTS.
@@ -100,7 +143,10 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
     """
     if IndexTTS2 is None:
         print("IndexTTS2 not available.")
-        return []
+        # Fix: Yield error for each task so main.py knows it failed explicitly
+        for task in tasks:
+            yield {"success": False, "error": "IndexTTS2 not available: " + str(sys.modules.get('indextts.infer_v2', 'Unknown Import Error'))}
+        return
 
     if model_dir is None:
         model_dir = DEFAULT_MODEL_DIR
@@ -117,7 +163,7 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
         tts = IndexTTS2(
             cfg_path=config_path, 
             model_dir=model_dir, 
-            use_fp16=False, 
+            use_fp16=True, 
             use_cuda_kernel=False, 
             use_deepspeed=False
         )
@@ -138,9 +184,19 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
             os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
             
             try:
-                ignore_keys = {'batch_size', 'qwen_mode', 'voice_instruct', 'preset_voice', 'qwen_model_size', 'qwen_ref_text', 'tts_service', 'action', 'json', 'repetition_penalty', 'cfg_scale'}
+                # Enable repetition_penalty and cfg_scale by NOT ignoring them
+                # Filter out arguments not supported by IndexTTS/HF Generate
+                ignore_keys = {'batch_size', 'qwen_mode', 'voice_instruct', 'preset_voice', 'qwen_model_size', 'qwen_ref_text', 'tts_service', 'action', 'json', 'cfg_scale', 'num_beams', 'length_penalty', 'max_new_tokens'}
                 
                 valid_kwargs = {k: v for k, v in kwargs.items() if k not in ignore_keys}
+                
+                # Add IndexTTS specific defaults
+                # User request: Do not use 'subtalker_' prefix for IndexTTS.
+                # Map standard kwargs to what IndexTTS (infer_v2) likely expects if missing
+                if 'do_sample' not in valid_kwargs: valid_kwargs['do_sample'] = True
+                if 'top_k' not in valid_kwargs: valid_kwargs['top_k'] = 50
+                if 'top_p' not in valid_kwargs: valid_kwargs['top_p'] = 1.0
+                if 'temperature' not in valid_kwargs: valid_kwargs['temperature'] = 0.9
                 
                 tts.infer(
                     spk_audio_prompt=ref, 
@@ -149,16 +205,42 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
                     verbose=False,
                     **valid_kwargs
                 )
+
                 
+                try:
+                    info = sf.info(out)
+                    dur = info.duration
+                    if 29.8 < dur < 30.2 and len(text) < 50:
+                        raise Exception(f"Generated audio is suspiciously long ({dur:.2f}s) for short text '{text[:20]}...'. Likely timeout/hallucination.")
+                    
+                    # Sanity check: excessive length
+                    if dur > 60:
+                         raise Exception(f"Generated audio too long ({dur:.2f}s).")
+                    
+                    # Hard limit for short text: if text < 10 chars and dur > 15s, it's garbage
+                    if len(text) < 10 and dur > 15.0:
+                         print(f"[BatchTTS] Warning: Short text '{text}' generated {dur:.2f}s audio. Truncating to 5s.")
+                         # Truncate
+                         trim_cmd = ['ffmpeg', '-y', '-i', out, '-t', '5', '-c', 'copy', out + "_trunc.wav"]
+                         subprocess.run(trim_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                         os.remove(out)
+                         os.rename(out + "_trunc.wav", out)
+                         dur = 5.0
+                         
+                except Exception as e_valid:
+                     print(f"[BatchTTS] Validation failed for {out}: {e_valid}")
+                     raise e_valid
+
                 # Emit Partial Result for UI to enable playback immediately
                 partial_data = {
                     "index": task.get('index', i),
                     "audio_path": out,
-                    "success": True
+                    "success": True,
+                    "duration": dur
                 }
                 print(f"[PARTIAL] {json.dumps(partial_data)}", flush=True)
                 
-                yield {"success": True, "output": out}
+                yield {"success": True, "audio_path": out}
 
             except Exception as e:
                 print(f"Failed task {i}: {e}")
@@ -181,17 +263,9 @@ def run_batch_tts(tasks, model_dir=None, config_path=None, language="English", *
         traceback.print_exc()
         pass
     finally:
-        # User Requirement: Unload VRAM after all inference is done
         if IndexTTS2 is not None:
-            # We don't have a direct 'unload' method on the class instance usually, but we can del it
-            # actually our run_batch_tts creates a local `tts` instance.
-            # wait, `tts = IndexTTS2(...)` is local to this function (line 117).
-            # So when function returns, it goes out of scope?
-            # Yes, unless there are circular refs.
-            # But we should be explicit.
             pass
         
-        # We need to access `tts` variable, but it might not be defined if init failed
         if 'tts' in locals():
             del tts
         

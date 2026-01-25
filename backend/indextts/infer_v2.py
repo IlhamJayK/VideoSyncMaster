@@ -403,8 +403,8 @@ class IndexTTS2:
               emo_vector=None,
               use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
               verbose=False, max_text_tokens_per_segment=120, stream_return=False, quick_streaming_tokens=0, **generation_kwargs):
-        print(">> starting inference...")
-        self._set_gr_progress(0, "starting inference...")
+        print(">> 开始推理...")
+        self._set_gr_progress(0, "开始推理...")
         if verbose:
             print(f"origin text:{text}, spk_audio_prompt:{spk_audio_prompt}, "
                   f"emo_audio_prompt:{emo_audio_prompt}, emo_alpha:{emo_alpha}, "
@@ -427,23 +427,15 @@ class IndexTTS2:
             emo_vector = list(emo_dict.values())
 
         if emo_vector is not None:
-            # we have emotion vectors; they can't be blended via alpha mixing
-            # in the main inference process later, so we must pre-calculate
-            # their new strengths here based on the alpha instead!
             emo_vector_scale = max(0.0, min(1.0, emo_alpha))
             if emo_vector_scale != 1.0:
-                # scale each vector and truncate to 4 decimals (for nicer printing)
                 emo_vector = [int(x * emo_vector_scale * 10000) / 10000 for x in emo_vector]
                 print(f"scaled emotion vectors to {emo_vector_scale}x: {emo_vector}")
 
         if emo_audio_prompt is None:
-            # we are not using any external "emotion reference voice"; use
-            # speaker's voice as the main emotion reference audio.
             emo_audio_prompt = spk_audio_prompt
-            # must always use alpha=1.0 when we don't have an external reference voice
             emo_alpha = 1.0
 
-        # 如果参考音频改变了，才需要重新生成, 提升速度
         if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
             if self.cache_spk_cond is not None:
                 self.cache_spk_cond = None
@@ -469,8 +461,8 @@ class IndexTTS2:
                                                      num_mel_bins=80,
                                                      dither=0,
                                                      sample_frequency=16000)
-            feat = feat - feat.mean(dim=0, keepdim=True)  # feat2另外一个滤波器能量组特征[922, 80]
-            style = self.campplus_model(feat.unsqueeze(0))  # 参考音频的全局style2[1,192]
+            feat = feat - feat.mean(dim=0, keepdim=True)
+            style = self.campplus_model(feat.unsqueeze(0))
 
             prompt_condition = self.s2mel.models['length_regulator'](S_ref,
                                                                      ylens=ref_target_lengths,
@@ -697,13 +689,13 @@ class IndexTTS2:
         wavs = self.insert_interval_silence(wavs, sampling_rate=sampling_rate, interval_silence=interval_silence)
         wav = torch.cat(wavs, dim=1)
         wav_length = wav.shape[-1] / sampling_rate
-        print(f">> gpt_gen_time: {gpt_gen_time:.2f} seconds")
-        print(f">> gpt_forward_time: {gpt_forward_time:.2f} seconds")
-        print(f">> s2mel_time: {s2mel_time:.2f} seconds")
-        print(f">> bigvgan_time: {bigvgan_time:.2f} seconds")
-        print(f">> Total inference time: {end_time - start_time:.2f} seconds")
-        print(f">> Generated audio length: {wav_length:.2f} seconds")
-        print(f">> RTF: {(end_time - start_time) / wav_length:.4f}")
+        print(f">> GPT生成时间: {gpt_gen_time:.2f} 秒")
+        print(f">> GPT前向传播时间: {gpt_forward_time:.2f} 秒")
+        print(f">> S2Mel生成时间: {s2mel_time:.2f} 秒")
+        print(f">> BigVGAN生成时间: {bigvgan_time:.2f} 秒")
+        print(f">> 总推理时间: {end_time - start_time:.2f} 秒")
+        print(f">> 生成音频时长: {wav_length:.2f} 秒")
+        print(f">> 实时率(RTF): {(end_time - start_time) / wav_length:.4f}")
 
         # save audio
         wav = wav.cpu()  # to cpu
@@ -711,11 +703,11 @@ class IndexTTS2:
             # 直接保存音频到指定路径中
             if os.path.isfile(output_path):
                 os.remove(output_path)
-                print(">> remove old wav file:", output_path)
+                print(">> 删除旧音频文件:", output_path)
             if os.path.dirname(output_path) != "":
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
             torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
-            print(">> wav file saved to:", output_path)
+            print(">> 音频已保存至:", output_path)
             if stream_return:
                 return None
             yield output_path

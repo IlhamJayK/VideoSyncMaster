@@ -1,8 +1,13 @@
 import sys
 import os
 import argparse
-import torch
+# import torch # Moved to inside main/functions for safety
 import pathlib
+
+# FORCE IMMEDIATE FLUSH
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+print("DEBUG: Pre-import check passed", file=sys.stderr, flush=True)
 
 # [USER REQUEST] Force Offline for manual handling of models
 os.environ['HF_HUB_OFFLINE'] = '1'
@@ -255,7 +260,12 @@ def setup_gpu_paths():
 # 238: 
 # Lazy Imports moved to functions or after dependency checks
 from asr import run_asr
-from alignment import align_audio, merge_audios_to_video, get_audio_duration
+from alignment import align_audio, get_audio_duration, merge_audios_to_video
+try:
+    import librosa
+    import soundfile as sf
+except ImportError:
+    pass # Will handle later or assume installed, get_audio_duration
 from llm import LLMTranslator
 import ffmpeg
 import json
@@ -444,7 +454,7 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
         original_text = seg['text']
         start = seg['start']
         end = seg['end']
-        duration = end - start
+        duration = max(end - start, 0.1) # Enforce min duration of 0.1s to prevent alignment errors
         
         print(f"  [{idx+1}/{len(segments)}] Translating: {original_text}")
         translated_text = translator.translate(original_text, target_lang)
@@ -486,10 +496,35 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
             print(f"    Failed to extract ref audio: {e}")
             continue
 
-        # C. TTS
-        tts_output_path = os.path.join(segments_dir, f"tts_{idx}.wav")
+        # Custom Logic for Qwen Global Reference (Design/Preset/Clone with explicit ref)
+        # If user provides a global ref_audio via kwargs (for Qwen Design/Clone), use it instead of segment ref.
+        # However, for Qwen Clone mode default, we often want segment-based refs if no global ref is provided.
+        
+        # Check if we have a global override
+        global_ref_override = kwargs.get('ref_audio') # passed from main args 'ref_audio' -> kwargs?? No, main args maps to kwargs 
+        # In main(), args.ref_audio is passed to dub_video via **tts_kwargs? No, wait.
+        # args.ref_audio is strictly for 'test_tts' or 'merge_video' in original parser. 
+        # We need to ensure dub_video receives it if we want to support it.
+        
+        # Actually, let's look at how dub_video is called in main().
+        # dub_video(..., **tts_kwargs)
+        # tts_kwargs includes: qwen_mode, voice_instruct, preset_voice, qwen_ref_text...
+        # It does NOT include 'ref_audio' from args.ref_audio by default in line 605.
+        
+        # We need to rely on `ref_clip_path` (segment specific) unless `qwen_mode` implies otherwise.
+        # But for 'design' mode, there is NO segment specific ref that makes sense (unless we use it for keeping duration?).
+        # Qwen 'design' purely relies on prompt. Ref audio is ignored by run_qwen_tts in design mode.
+        
+        # For 'clone' mode:
+        # If we are doing "Design -> Clone" handoff, we need the global designed audio.
+        # We can pass this via `kwargs['ref_audio']` if we add it to tts_kwargs in main.
+        
+        effective_ref_audio = ref_clip_path
+        if kwargs.get('ref_audio'):
+             effective_ref_audio = kwargs.get('ref_audio')
+        
         # Call the dynamic runner
-        success = run_tts_func(translated_text, ref_clip_path, tts_output_path, language=target_lang, **kwargs)
+        success = run_tts_func(translated_text, effective_ref_audio, tts_output_path, language=target_lang, **kwargs)
         
         if success:
                 
@@ -551,6 +586,10 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
 def main():
     # Setup GPU paths early to prevent DLL load errors
     setup_gpu_paths()
+    
+    # Lazy import torch now that paths are set
+    global torch
+    import torch
 
     parser = argparse.ArgumentParser(description="VideoSync Backend")
     parser.add_argument("--action", type=str, help="Action to perform: asr, tts, align, merge_video", default="test_asr")
@@ -566,10 +605,15 @@ def main():
     parser.add_argument("--model_dir", type=str, help="Path to models directory (HF_HOME)")
     parser.add_argument("--asr", type=str, help="ASR service to use: whisperx, jianying, bcut", default="whisperx")
     parser.add_argument("--temperature", type=float, help="TTS Temperature", default=0.8)
-    parser.add_argument("--top_p", type=float, help="TTS Top_P", default=0.8)
-    parser.add_argument("--top_k", type=int, help="TTS Top_K", default=30)
-    parser.add_argument("--repetition_penalty", type=float, help="TTS Repetition Penalty", default=10.0)
-    parser.add_argument("--cfg_scale", type=float, help="TTS CFG Scale", default=0.7)
+    parser.add_argument("--top_p", type=float, help="Top P", default=0.8)
+    parser.add_argument("--repetition_penalty", type=float, help="Repetition Penalty", default=1.0)
+    parser.add_argument("--cfg_scale", type=float, help="CFG Scale", default=0.7)
+    
+    # New Advanced Params
+    parser.add_argument("--num_beams", type=int, help="Num Beams for beam search", default=1)
+    parser.add_argument("--top_k", type=int, help="Top K sampling", default=5)
+    parser.add_argument("--length_penalty", type=float, help="Length Penalty for beam search", default=1.0)
+    parser.add_argument("--max_new_tokens", type=int, help="Max New Tokens (mel length limit)", default=2048)
     parser.add_argument("--strategy", type=str, help="Video sync strategy: auto_speedup, freeze_frame, frame_blend", default="auto_speedup")
     parser.add_argument("--output_dir", type=str, help="Output directory for debug/intermediate files")
     parser.add_argument("--vad_onset", type=float, help="VAD onset threshold", default=0.700)
@@ -580,7 +624,7 @@ def main():
     parser.add_argument("--preset_voice", type=str, help="Preset Voice for Qwen3", default="Vivian")
     parser.add_argument("--qwen_model_size", type=str, help="Qwen Model Size: 1.7B or 0.6B", default="1.7B")
     parser.add_argument("--qwen_ref_text", type=str, help="Reference text for Qwen Clone mode", default="")
-    parser.add_argument("--batch_size", type=int, help="Batch Size for TTS", default=1)
+    parser.add_argument("--batch_size", type=int, help="Batch Size for TTS", default=10)
     args = parser.parse_args()
 
     tts_kwargs = {
@@ -588,12 +632,18 @@ def main():
         "top_p": args.top_p,
         "top_k": args.top_k,
         "repetition_penalty": args.repetition_penalty,
-        "inference_cfg_rate": args.cfg_scale,
+        "inference_cfg_rate": args.cfg_scale, 
+        "cfg_scale": args.cfg_scale, 
+        "num_beams": args.num_beams,
+        "length_penalty": args.length_penalty,
+        "max_new_tokens": args.max_new_tokens,
         "qwen_mode": args.qwen_mode,
         "voice_instruct": args.voice_instruct,
         "preset_voice": args.preset_voice,
         "qwen_model_size": args.qwen_model_size,
-        "qwen_ref_text": args.qwen_ref_text
+        "qwen_model_size": args.qwen_model_size,
+        "qwen_ref_text": args.qwen_ref_text,
+        "ref_audio": args.ref_audio  # Add explicit ref_audio support for Qwen Design->Clone handoff
     }
 
     result_data = None
@@ -784,9 +834,46 @@ def main():
                     else:
                         # Extract from video
                         try:
+                            # Use .cache/raw for stricter debugging
+                            raw_dir = os.path.join(os.path.dirname(output_audio), ".cache", "raw")
+                            os.makedirs(raw_dir, exist_ok=True)
+                            raw_ref_path = os.path.join(raw_dir, f"ref_raw_{start_time}.wav")
+
                             ffmpeg.input(video_path, ss=start_time, t=duration).output(
-                                ref_clip_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
+                                raw_ref_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
                             ).run(overwrite_output=True)
+                            
+                            # TRIM SILENCE
+                            try:
+                                y, sr = librosa.load(raw_ref_path, sr=None)
+                                y_trim, _ = librosa.effects.trim(y, top_db=20) # 20dB threshold
+                                trim_dur = len(y_trim) / sr
+                                
+                                if trim_dur < 0.5:
+                                    print(f"Warning: Extracted ref audio too short after trim ({trim_dur:.2f}s < 0.5s). May cause hallucination!")
+                                    # Logic: Fail or fallback? User requested strictness.
+                                    # If strictly failing:
+                                    # result_data = {"success": False, "error": "Reference audio contains only silence"}
+                                    # return
+                                    # But let's just warn for SingleTTS, or maybe use untrimmed if that was better? No, silence is bad.
+                                    pass
+                                else:
+                                    print(f"Ref audio trimmed: {len(y)/sr:.2f}s -> {trim_dur:.2f}s")
+                                
+                                # Save FINAL ref to the path expected by TTS
+                                if len(y_trim) > 0:
+                                    sf.write(ref_clip_path, y_trim, sr)
+                                else:
+                                     # Fallback to copy if trim failed completely (shouldn't happen if duration checks out)
+                                    import shutil
+                                    shutil.copy(raw_ref_path, ref_clip_path)
+
+                            except Exception as trim_err:
+                                print(f"Warning: Failed to trim silence from ref: {trim_err}")
+                                # Fallback
+                                import shutil
+                                shutil.copy(raw_ref_path, ref_clip_path)
+
                             should_delete_ref = True
                         except Exception as e:
                             result_data = {"success": False, "error": f"Failed to extract ref audio: {str(e)}"}
@@ -821,17 +908,22 @@ def main():
                                              print(f"[SingleTTS] Duration {current_dur:.2f}s > {duration:.2f}s. Strategy {strategy}, skipping alignment.")
                                         else:
                                             print(f"[SingleTTS] Duration {current_dur:.2f}s > {duration:.2f}s. Aligning...")
-                                        temp_aligned = output_audio.replace('.wav', '_aligned_temp.wav')
-                                        if align_audio(output_audio, temp_aligned, duration):
-                                            import shutil
-                                            shutil.move(temp_aligned, output_audio)
-                                            print(f"[SingleTTS] Aligned and overwritten: {output_audio}")
-                                        else:
-                                            print("[SingleTTS] Alignment failed.")
+                                            temp_aligned = output_audio.replace('.wav', '_aligned_temp.wav')
+                                            if align_audio(output_audio, temp_aligned, duration):
+                                                import shutil
+                                                shutil.move(temp_aligned, output_audio)
+                                                print(f"[SingleTTS] Aligned and overwritten: {output_audio}")
+                                            else:
+                                                print("[SingleTTS] Alignment failed.")
                                 except Exception as e:
                                     print(f"[SingleTTS] Warning: Auto-alignment failed: {e}")
 
-                            result_data = {"success": True, "audio_path": output_audio, "text": translated_text}
+                            final_duration = 0.0
+                            try:
+                                final_duration = get_audio_duration(output_audio)
+                            except:
+                                pass
+                            result_data = {"success": True, "audio_path": output_audio, "text": translated_text, "duration": final_duration}
                         else:
                             result_data = {"success": False, "error": "TTS generation failed"}
             except Exception as e:
@@ -869,22 +961,32 @@ def main():
                 with open(json_path, 'r', encoding='utf-8') as f:
                     segments = json.load(f)
                 
-                print(f"Batch generating TTS for {len(segments)} segments using {tts_service_name}...")
+                work_dir = os.path.dirname(json_path)
+                print(f"正在使用 {tts_service_name} 批量生成 {len(segments)} 个片段的语音...")
+                print(f"\n[阶段1] 正在提取参考音频到 {os.path.join(work_dir, '.cache', 'raw')} ...")
 
                 tasks = []
-
-                work_dir = os.path.dirname(json_path)
+                skipped_tasks = [] # Track indices of skipped tasks
 
                 for i, seg in enumerate(segments):
+                    # Use explicit original_index if provided (for retrying partial lists), else fallback to enumerate
+                    final_idx = seg.get('original_index', i)
+                    
                     text = seg.get('text', '')
                     start = float(seg.get('start', 0))
                     end = float(seg.get('end', 0))
                     duration = end - start
                     
+                    # Pad short reference audio to prevent IndexTTS crashes
+                    extract_start = start
+                    extract_duration = duration
+                    if duration < 2.0:
+                        padding = (2.0 - duration) / 2
+                        extract_start = max(0, start - padding)
+                        extract_duration = duration + (padding * 2)
+                        # print(f"  [RefPad] {i}: {duration:.2f}s -> {extract_duration:.2f}s")
 
-                    extraction_duration = duration
-
-                    if duration < 1.0: duration = 1.0 
+ 
                     
                     out_path = seg.get('audioPath') 
                     if not out_path:
@@ -894,110 +996,138 @@ def main():
                         ref_path = args.ref_audio
                         should_clean_ref = False
                     else:
+
+                        # Batch Mode Extraction
+                        raw_dir = os.path.join(work_dir, ".cache", "raw")
+                        os.makedirs(raw_dir, exist_ok=True)
+                        
+                        raw_ref_path = os.path.join(raw_dir, f"ref_raw_{i}_{start}.wav")
+                        # The final path expected by TTS runner
                         ref_path = os.path.join(work_dir, f"ref_{i}_{start}.wav")
+
+                        should_clean_ref = True
                         should_clean_ref = True
                         try:
-                            ffmpeg.input(video_path, ss=start, t=extraction_duration).output(
-                                ref_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
+                            ffmpeg.input(video_path, ss=extract_start, t=extract_duration).output(
+                                raw_ref_path, acodec='pcm_s16le', ac=1, ar=24000, loglevel="error"
                             ).run(overwrite_output=True)
+                            
+                            # Debug: Verify raw duration
+                            try:
+                                raw_dur = get_audio_duration(raw_ref_path)
+                                print(f"  [参考检查] 片段 {i} ({start}-{end}): 提取原始长度 {raw_dur}s", flush=True)
+                            except: pass
+
+                            # TRIM SILENCE 
+                            try:
+                                y, sr = librosa.load(raw_ref_path, sr=None)
+                                y_trim, _ = librosa.effects.trim(y, top_db=20)
+                                trim_dur = len(y_trim) / sr
+                                
+                                if trim_dur < 0.1:
+                                    print(f"  [参考检查] 片段 {i} 警告: 去除静音后时长 {trim_dur:.2f}s 极短。")
+                                    # User requested NO SKIP. Proceed.
+                                else:
+                                    print(f"  [参考检查] 片段 {i} 去静音: {len(y)/sr:.2f}s -> {trim_dur:.2f}s")
+                                
+                                if len(y_trim) > 0:
+                                    sf.write(ref_path, y_trim, sr)
+                                else:
+                                    # This branch essentially dead code if trim_dur < 0.5 block works, but safe fallback
+                                    shutil.copy(raw_ref_path, ref_path)
+
+                            except Exception as trim_err:
+                                print(f"  [参考检查] 片段 {i} 去静音失败: {trim_err}")
+                                shutil.copy(raw_ref_path, ref_path)
+
                         except Exception as e:
-                            print(f"Failed to extract ref for segment {i}: {e}")
+                            print(f"片段 {i} 提取参考音频失败: {e}")
                             continue
                     
                     tasks.append({
                         "text": text,
                         "ref_audio_path": ref_path,
                         "output_path": out_path,
-                        "index": i,
+                        "index": final_idx,
                         "clean_ref": should_clean_ref
                     })
                 
                 # 2. Run Batch TTS
-                # This keeps the model loaded
-                print(f"Running TTS inference on {len(tasks)} items...")
-                # Assuming batch TTS also needs language. We can pass the global language if relevant 
-                # or let it default. But main.py doesn't seem to have explicit lang for batch unless we assume defaults.
-                # Actually, `generate_batch_tts` didn't have a --lang arg in `main` parser explicitly checked above, 
-                # but `args.lang` defaults to "English".
-                target_lang = args.lang if args.lang else "English"
+                print(f"\n[阶段2] 正在对 {len(tasks)} 个项目运行 TTS 推理 (因参考音频问题跳过 {len(segments)-len(tasks)} 个)...")
                 
-                # Check args of dynamic batch runner. Assume compatible sig.
-                batch_size = args.batch_size if args.batch_size else 1
-                batch_results = run_batch_tts_func(tasks, language=target_lang, batch_size=batch_size, **tts_kwargs) 
+                if not tasks:
+                     print("没有有效的任务可运行。")
+                     result_data = {"success": True, "results": []} # Or error?
+                else:
+                    target_lang = args.lang if args.lang else "English"
+                    batch_size = args.batch_size if args.batch_size else 1
+                    batch_results = run_batch_tts_func(tasks, language=target_lang, batch_size=batch_size, **tts_kwargs) 
                 
-                # 3. Cleanup Refs & Format Result
-
-                final_results = []
-                for i, res in enumerate(batch_results):
-                    task = tasks[i]
-                    # Clean ref
-                    if task.get('clean_ref', True):
-                        try: os.remove(task['ref_audio_path'])
-                        except: pass
+                    # 3. Cleanup & Process
+                    final_output_list = []
+                
+                    task_result_map = { t['index']: r for t, r in zip(tasks, batch_results) }
                     
-                    if res['success']:
-                        # Check alignment
-                        try:
-                            # We need target duration from original segment
-                            # We stored 'index' in task. Retrieve segment from 'segments' list using index?
-                            # Yes, segments[task['index']]
-                            seg_idx = task['index']
-                            if seg_idx < len(segments):
-                                origin_seg = segments[seg_idx]
-                                s_start = float(origin_seg.get('start', 0))
-                                s_end = float(origin_seg.get('end', 0))
-                                slot_dur = s_end - s_start
-                                
-                                audio_p = res['output']
-                                print(f"[DEBUG] Checking segment {seg_idx}: Slot={slot_dur:.2f}s, Path={audio_p}")
+                    for i, seg in enumerate(segments):
+                         final_idx = seg.get('original_index', i)
+                         
+                         if final_idx in task_result_map:
+                             res = task_result_map[final_idx]
+                             
+                             if res['success']:
+                                 start = float(seg.get('start', 0))
+                                 end = float(seg.get('end', 0))
+                                 target_dur = end - start
+                                 
+                                 output_audio = res.get('audio_path')
+                                 if not output_audio:
+                                     print(f"[批量TTS] 片段 {final_idx} 警告: 返回成功但缺少 audio_path。")
+                                     res['success'] = False
+                                     res['error'] = "Missing audio_path in result"
+                                     final_output_list.append(res)
+                                     continue
 
-                                if os.path.exists(audio_p) and slot_dur > 0:
-                                    curr = get_audio_duration(audio_p)
-                                    print(f"[DEBUG] Segment {seg_idx} Actual Duration: {curr}") # Check if None
-                                    
-                                    if curr and curr > slot_dur + 0.1:
-                                        # Check strategy
-                                        strategy = args.strategy if hasattr(args, 'strategy') else 'auto_speedup'
-                                        
-                                        if strategy in ['frame_blend', 'freeze_frame', 'rife']:
-                                            print(f"[BatchTTS] Strategy {strategy}, skipping alignment for segment {seg_idx}.")
-                                        else:
-                                            print(f"[BatchTTS] Segment {seg_idx} duration {curr:.2f}s > {slot_dur:.2f}s. Aligning...")
-                                            temp_aligned = audio_p.replace('.wav', '_aligned_temp.wav')
-                                            if align_audio(audio_p, temp_aligned, slot_dur):
-                                                import shutil
-                                                # Retry loop for windows file lock
-                                                import time
-                                                for _ in range(3):
-                                                    try:
-                                                        shutil.move(temp_aligned, audio_p)
-                                                        print(f"[BatchTTS] Aligned and overwritten: {audio_p}")
-                                                        break
-                                                    except Exception as move_err:
-                                                        print(f"[BatchTTS] Warning: Move failed {move_err}, retrying...")
-                                                        time.sleep(0.5)
-                                            else:
-                                                print(f"[BatchTTS] align_audio returned False")
-                                    else:
-                                        print(f"[BatchTTS] Segment {seg_idx} fits ({curr} <= {slot_dur + 0.1})")
-                                else:
-                                    print(f"[DEBUG] Skip align: Exists={os.path.exists(audio_p)}, Slot={slot_dur}")
-                        except Exception as e:
-                            print(f"[BatchTTS] Auto-align warning: {e}")
+                                 current_dur = get_audio_duration(output_audio)
+                                 
+                                 if current_dur and current_dur > target_dur + 0.1:
+                                     strategy = getattr(args, 'strategy', 'auto_speedup')
+                                     if strategy in ['frame_blend', 'freeze_frame', 'rife']:
+                                          print(f"[批量TTS] 片段 {final_idx} 时长 {current_dur:.2f}s > {target_dur:.2f}s。策略 {strategy}，跳过对齐。")
+                                     else:
+                                          print(f"[批量TTS] 正在对齐片段 {final_idx} ({current_dur:.2f}s -> {target_dur:.2f}s)...")
+                                          temp_aligned = output_audio.replace('.wav', '_aligned_temp.wav')
+                                          if align_audio(output_audio, temp_aligned, target_dur):
+                                              import shutil
+                                              shutil.move(temp_aligned, output_audio)
+                                              
+                                              # Re-measure actual duration to be sure
+                                              new_dur = get_audio_duration(output_audio)
+                                              if new_dur:
+                                                  res['duration'] = new_dur
+                                              else:
+                                                  res['duration'] = target_dur
+                                              
+                             final_output_list.append(res)
+                         else:
+                             final_output_list.append({
+                                 "index": final_idx,
+                                 "success": False,
+                                 "error": "TTS Task Failed (No result returned). Check logs for details."
+                             })
 
-                        final_results.append({
-                            "index": task['index'],
-                            "audio_path": res['output'],
-                            "success": True
-                        })
-                    else:
-                        final_results.append({
-                            "index": task['index'],
-                            "success": False,
-                            "error": res.get('error')
-                        })
+                result_data = {"success": True, "results": final_output_list}
                 
-                result_data = {"success": True, "results": final_results}
+                # Cleanup .cache (redundant raw files)
+                try:
+                    cache_dir_to_remove = os.path.join(work_dir, ".cache")
+                    if os.path.exists(cache_dir_to_remove):
+                        import shutil
+                        shutil.rmtree(cache_dir_to_remove)
+                        # print(f"Cleaned up redundant cache: {cache_dir_to_remove}")
+                except:
+                    pass
+
+
 
             except Exception as e:
                 print(f"Batch TTS Error: {e}")
@@ -1007,13 +1137,34 @@ def main():
         else:
             print("Usage: --action generate_batch_tts --input video.mp4 --ref segments.json")
 
+    elif args.action == "check_audio_files":
+        # Bulk check duration of files
+        if args.input:
+            try:
+                file_list = []
+                # Support passing JSON list string
+                try:
+                    file_list = json.loads(args.input)
+                except:
+                    file_list = [args.input]
+
+                results = {}
+                for path in file_list:
+                    if os.path.exists(path):
+                        results[path] = get_audio_duration(path) or 0.0
+                    else:
+                        results[path] = -1.0 # Not found
+
+                result_data = {"success": True, "durations": results}
+            except Exception as e:
+                result_data = {"success": False, "error": str(e)}
     else:
         print(f"Unknown action: {args.action}")
 
-    if args.json and result_data is not None:
-        print("\n__JSON_START__")
-        print(json.dumps(result_data))
-        print("__JSON_END__")
+    if result_data is not None and args.json:
+        print("\n__JSON_START__\n")
+        print(json.dumps(result_data, indent=None)) # Compact JSON
+        print("\n__JSON_END__\n", flush=True) # Ensure flush so UI receives it immediately
 
     try:
         if args.action == 'asr':
@@ -1023,14 +1174,8 @@ def main():
             # Pass output_dir if provided
             result_data = run_asr(args.input, args.model, service=args.asr, output_dir=args.output_dir)
         elif args.action == 'translate_text':
-             # ... (rest of logic handles exceptions internally, but good to catch top level)
-             # Handled inside specific functions or below
              pass 
              
-        # ... logic ...
-        
-        # We need to wrap the MAIN execution block (lines ~340+) not just the end.
-        # Actually easier to use sys.excepthook for unhandled exceptions
     except Exception as e:
         debug_log(f"CRITICAL ERROR: {e}")
         import traceback
@@ -1043,5 +1188,9 @@ if __name__ == "__main__":
     debug_log("Entering main block")
     main()
     print("Force exiting...")
-    sys.stdout.flush()
+    try:
+        sys.stdout.close()
+        sys.stderr.close()
+    except:
+        pass
     os._exit(0)

@@ -79,6 +79,11 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
     """
     temp_mixed_path = None
     try:
+        # Lazy imports for performance
+        import numpy as np
+        import librosa
+        import soundfile as sf
+
         if not audio_segments:
             print("No audio segments provided.")
             return False
@@ -105,11 +110,7 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
 
         print(f"[Mixer] Initialized buffer: {video_duration:.2f}s ({total_samples} samples)", flush=True)
 
-        # 2. Mix audio segments
-        import numpy as np
-        import librosa
-        import soundfile as sf
-        
+        # 2. Mix audio segments        
         for i, seg in enumerate(audio_segments):
             start_time = seg['start']
             file_path = seg['path']
@@ -322,39 +323,6 @@ def apply_rife_interpolation(input_path, output_path, target_duration):
             break
             
     if success:
-        # Now current_in has 2^n * frames.
-        # We assume 2^n >= raw_factor
-        # So effective 'content duration' if played at original speed is >= target_duration
-        # We rename to output, but we might need to finalize it?
-        # merge_video_advanced expects a video chunk.
-        # It will apply setpts later?
-        # merge_video_advanced logic: 
-        # if scale_factor > 1.05: apply setpts.
-        # format: setpts=FACTOR*PTS
-        # If we return a RIFE'd video, its PTS are likely reset or just doubled density.
-        # If RIFE doubles frames and keeps duration constant (doubles FPS):
-        #   Duration: 2s. Frames 60 (was 30).
-        #   We want to fill 5s.
-        #   We need to play these 60 frames over 5s? No.
-        #   Wait, pass_count ensuring we have *enough frames* for smooth 30fps at 5s.
-        #   2s @ 30fps = 60 frames.
-        #   Target 5s @ 30fps = 150 frames.
-        #   Pass 1: 120 frames. (Not enough for 150).
-        #   Pass 2: 240 frames. (Enough).
-        #   So if we have 240 frames. We want to play them over 5s.
-        #   FPS = 240 / 5 = 48 fps. 
-        #   If we force output to 30fps (via -r 30 in final merge), we drop frames. 48->30.
-        #   This is fine.
-        #   BUT: The *timestamps* in current_in are likely for "2s" (high fps).
-        #   So ffmpeg sees it as 2s video.
-        #   merge_video_advanced calculates scale_factor = seg_audio_dur (target) / slot_dur (input).
-        #   If we replace input with RIFE output, the duration is still ~2s.
-        #   So merge_video_advanced will apply setpts=2.5*PTS.
-        #   2s * 2.5 = 5s.
-        #   Since we have 240 frames in that 2s (high density), stretching 2.5x -> 5s.
-        #   Result: 240 frames over 5s. 48 fps.
-        #   This works perfect.
-        
         if os.path.exists(output_path):
             try: os.remove(output_path)
             except: pass
@@ -389,7 +357,8 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
             shutil.rmtree(chunk_dir)
         os.makedirs(chunk_dir, exist_ok=True)
         
-        cursor = 0.0
+        # Use 'source_cursor' to track progress in the ORIGINAL video timeline
+        source_cursor = 0.0
         
         for i, seg in enumerate(sorted_segments):
             seg_start = float(seg['start'])
@@ -397,49 +366,60 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
             # Assume main.py now passes 'duration' (original slot duration)
             slot_dur = float(seg.get('duration', 0))
             
-            # 1. Handle Gap (if any)
-            if seg_start > cursor:
-                gap_dur = seg_start - cursor
-                if gap_dur > 0.05: # Ignore tiny gaps
-                    print(f"  [Gap] {cursor:.2f}s -> {seg_start:.2f}s ({gap_dur:.2f}s)")
+            # Sanity check: Ensure slot_dur is valid.
+            if slot_dur <= 0.01:
+                audio_len = get_audio_duration(seg_audio_path) or 3.0
+                print(f"  [Seg {i}] Warning: Invalid slot_dur {slot_dur}, referencing audio len {audio_len}s")
+                slot_dur = audio_len
+
+            # 1. Handle Gap (Space between previous segment end and this segment start)
+            # Gap Video: Video content from [source_cursor] to [seg_start]
+            if seg_start > source_cursor:
+                gap_dur = seg_start - source_cursor
+                if gap_dur > 0.1: # Ignore tiny gaps (<0.1s, approx 3 frames)
+                    print(f"  [Gap] {source_cursor:.2f}s -> {seg_start:.2f}s ({gap_dur:.2f}s)")
                     v_chunk = os.path.join(chunk_dir, f"gap_{i}.mp4")
                     
                     try:
-                        input_v = ffmpeg.input(video_path, ss=cursor, t=gap_dur)['v']
+                        # Video: Original content
+                        input_v = ffmpeg.input(video_path, ss=source_cursor, t=gap_dur)['v']
+                        # Audio: Silent (or we could copy original audio for ambient? User usually wants dub only)
+                        # Let's stick to silence for dubbing mode to ensure clean background if requested, 
+                        # but usually dubbing implies retaining background music? 
+                        # This function is 'merge_audios_to_video', usually replacing audio.
                         input_a = ffmpeg.input(f"anullsrc=channel_layout=stereo:sample_rate=44100", f='lavfi', t=gap_dur)
                         
                         (
                             ffmpeg
-                            .output(input_v, input_a, v_chunk, vcodec='libx264', acodec='aac', ac=2, ar=44100, **{'b:v': '4M'}, preset='fast', shortest=None)
+                            .output(input_v, input_a, v_chunk, vcodec='libx264', acodec='aac', ac=2, ar=44100, **{'b:v': '4M', 'r': 30}, preset='fast', shortest=None)
                             .run(overwrite_output=True, quiet=True)
                         )
                         clips_list.append(v_chunk)
                     except ffmpeg.Error as e:
                         print(f"Gap generation error: {e.stderr.decode() if e.stderr else str(e)}")
+                
+                # Advance source cursor to start of this segment
+                source_cursor = seg_start
             
             # 2. Handle Segment
+            # If overlap (seg_start < source_cursor), we start extracting from source_cursor
+            # effectively trimming the start of the video slot to maintain continuity.
+            effective_video_start = max(seg_start, source_cursor)
+            
+            # Calc scale factor based on audio length
             seg_audio_dur = get_audio_duration(seg_audio_path) or 0.1
             
-            # Determine processing
-            if slot_dur <= 0.05:
-                # If slot is practically zero/missing, assume insert mode or error.
-                # Use audio duration as slot.
-                slot_dur = 0.1
+            scale_factor = seg_audio_dur / slot_dur
             
-            scale_factor = seg_audio_dur / slot_dur if slot_dur > 0 else 1.0
-            
-            print(f"  [Seg {i}] Slot: {slot_dur:.2f}s, Audio: {seg_audio_dur:.2f}s, Factor: {scale_factor:.2f}x")
+            print(f"  [Seg {i}] Source: {effective_video_start:.2f}s (+{slot_dur:.2f}s) | Audio: {seg_audio_dur:.2f}s | Factor: {scale_factor:.2f}x")
             
             v_chunk_seg = os.path.join(chunk_dir, f"seg_{i}.mp4")
             
-            # FFMPEG Command Construction
-            # We construct filter chain manually
-            
-            stream_v = ffmpeg.input(video_path, ss=seg_start, t=slot_dur)['v']
+            # Extract Video Slot
+            stream_v = ffmpeg.input(video_path, ss=effective_video_start, t=slot_dur)['v']
             stream_a = ffmpeg.input(seg_audio_path)
             
             # Prepare Video Filter
-            # Structure: (filter_name, [args], {kwargs})
             v_filters = []
             
             if scale_factor > 1.05 and strategy != 'auto_speedup':
@@ -450,41 +430,40 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                     v_filters.append(('minterpolate', [], {'mi_mode': 'blend'}))
                 elif strategy == 'freeze_frame':
                     # Freeze frame: tpad
+                    # We want total video duration = seg_audio_dur.
+                    # Current video duration = slot_dur.
                     pad_dur = seg_audio_dur - slot_dur
                     if pad_dur > 0:
-                        v_filters.append(('tpad', [], {'stop_mode': 'clone', 'stop_duration': str(pad_dur)}))
+                        # stop_mode=clone freezes the last frame
+                        # Add a safety buffer (0.5s) to ensure the freeze covers the entire audio
+                        # We will strictly trim the output using 't' parameter below to ensure perfect sync
+                        v_filters.append(('tpad', [], {'stop_mode': 'clone', 'stop_duration': str(pad_dur + 0.5)}))
                 elif strategy == 'rife':
                      # RIFE Interpolation
-                     # 1. Extract raw chunk
                      raw_chunk = os.path.join(chunk_dir, f"rife_in_{i}.mp4")
                      rife_out = os.path.join(chunk_dir, f"rife_out_{i}.mp4")
                      
                      rife_success = False
                      try:
-                         # Extract without audio
                          (
                             ffmpeg
-                            .input(video_path, ss=seg_start, t=slot_dur)
+                            .input(video_path, ss=effective_video_start, t=slot_dur)
                             .output(raw_chunk, vcodec='libx264', preset='fast', an=None)
                             .run(overwrite_output=True, quiet=True)
                          )
                          
                          if apply_rife_interpolation(raw_chunk, rife_out, seg_audio_dur):
                              rife_success = True
-                             # Switch input stream to RIFE output
                              stream_v = ffmpeg.input(rife_out)['v']
-                             
-                             # Clean up input chunk early
                              try: os.remove(raw_chunk)
                              except: pass
                      except Exception as e:
                          print(f"  [Seg {i}] RIFE prep failed: {e}")
                      
-                     # Apply slow motion (SetPTS)
-                     # Steps: RIFE added frames. SetPTS stretches time.
                      v_filters.append(('setpts', [f"{scale_factor}*PTS"], {}))
             
             else:
+                 # Standard behavior or auto_speedup (if it reached here for some reason)
                  if abs(scale_factor - 1.0) > 0.02:
                      v_filters.append(('setpts', [f"{scale_factor}*PTS"], {}))
 
@@ -496,16 +475,20 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                 'ar': 44100,
                 'b:v': '4M', 
                 'preset': 'fast',
-                'shortest': None
+                'r': 30, # Enforce 30fps to avoid VFR sync issues in concat
+                # 'shortest': None # We will use explicit 't' instead
             }
             
-            # Apply filter chain
+            # Enforce strict duration to match audio exactly
+            # This ensures the "freeze" releases exactly when the audio line finishes
+            if seg_audio_dur > 0:
+                 output_args['t'] = seg_audio_dur
+            
             out_stream = stream_v
             if v_filters:
                 for fname, fargs, fkwargs in v_filters:
                     out_stream = out_stream.filter(fname, *fargs, **fkwargs)
 
-            # Map streams: Processed Video + New Audio
             try:
                 (
                     ffmpeg
@@ -515,25 +498,24 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                 clips_list.append(v_chunk_seg)
             except ffmpeg.Error as e:
                  print(f"Seg generation error {i}: {e.stderr.decode() if e.stderr else str(e)}")
-                 # Fallback?
             
-            # Update cursor
-            cursor = seg_start + slot_dur
+            # Update source_cursor to end of this slot
+            source_cursor = effective_video_start + slot_dur
             
         # 3. Handle Tail
         probe = ffmpeg.probe(video_path)
         total_duration = float(probe['format']['duration'])
         
-        if cursor < total_duration - 0.1:
-            tail_dur = total_duration - cursor
-            print(f"  [Tail] {cursor:.2f}s -> {total_duration:.2f}s")
+        if source_cursor < total_duration - 0.1:
+            tail_dur = total_duration - source_cursor
+            print(f"  [Tail] {source_cursor:.2f}s -> {total_duration:.2f}s")
             v_chunk = os.path.join(chunk_dir, "tail.mp4")
             try:
-                input_v = ffmpeg.input(video_path, ss=cursor, t=tail_dur)['v']
+                input_v = ffmpeg.input(video_path, ss=source_cursor, t=tail_dur)['v']
                 input_a = ffmpeg.input(f"anullsrc=channel_layout=stereo:sample_rate=44100", f='lavfi', t=tail_dur)
                 (
                     ffmpeg
-                    .output(input_v, input_a, v_chunk, vcodec='libx264', acodec='aac', ac=2, ar=44100, **{'b:v': '4M'}, preset='fast', shortest=None)
+                    .output(input_v, input_a, v_chunk, vcodec='libx264', acodec='aac', ac=2, ar=44100, **{'b:v': '4M', 'r': 30}, preset='fast', shortest=None)
                     .run(overwrite_output=True, quiet=True)
                 )
                 clips_list.append(v_chunk)
