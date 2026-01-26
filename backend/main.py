@@ -347,11 +347,11 @@ def transcode_video(input_path, output_path):
         print(f"Transcoding failed: {e}")
         return {"success": False, "error": str(e)}
 
-def translate_text(input_text_or_json, target_lang):
+def translate_text(input_text_or_json, target_lang, **kwargs):
     """
     Translates text or a list of segments (JSON string).
     """
-    translator = LLMTranslator()
+    translator = LLMTranslator(**kwargs)
     
     try:
         # Try to parse as JSON list of segments
@@ -359,6 +359,33 @@ def translate_text(input_text_or_json, target_lang):
         data = json.loads(input_text_or_json)
         
         if isinstance(data, list):
+            # [Batch Mode for External API]
+            if translator.use_external:
+                print(f"Batch Translating {len(data)} segments via External API to {target_lang}...")
+                
+                # Extract texts
+                texts_to_translate = [item.get('text', '') for item in data]
+                
+                # Perform Batch Translation
+                translated_texts = translator.translate_batch(texts_to_translate, target_lang)
+                
+                # Reassemble
+                translated_segments = []
+                for i, item in enumerate(data):
+                    new_item = item.copy()
+                    # Safety check for length mismatch (handled in llm.py but good to be safe)
+                    trans_text = translated_texts[i] if i < len(translated_texts) else item.get('text', '')
+                    new_item['text'] = trans_text
+                    translated_segments.append(new_item)
+                    
+                    # Optional: Print progress or debug?
+                    # Batch is fast, maybe just print first/last or summary
+                
+                print(f"Batch translation complete. Processed {len(translated_segments)} segments.")
+                translator.cleanup()
+                return {"success": True, "segments": translated_segments}
+
+            # [Original Loop for Local Model]
             print(f"Translating {len(data)} segments to {target_lang}...")
             translated_segments = []
             for idx, item in enumerate(data):
@@ -411,7 +438,7 @@ def dub_video(input_path, target_lang, output_path, asr_service="whisperx", vad_
         return {"success": False, "error": f"Failed to initialize TTS service: {tts_service}"}
 
     # 1. Initialize LLM
-    translator = LLMTranslator()
+    translator = LLMTranslator(**kwargs)
     
     # 2. Run ASR
     print("Step 1/4: Running ASR...", flush=True)
@@ -625,6 +652,9 @@ def main():
     parser.add_argument("--qwen_model_size", type=str, help="Qwen Model Size: 1.7B or 0.6B", default="1.7B")
     parser.add_argument("--qwen_ref_text", type=str, help="Reference text for Qwen Clone mode", default="")
     parser.add_argument("--batch_size", type=int, help="Batch Size for TTS", default=10)
+    parser.add_argument("--api_key", type=str, help="API Key for External Translation", default=None)
+    parser.add_argument("--base_url", type=str, help="Base URL for External Translation", default=None)
+    parser.add_argument("--model", type=str, help="Model Name for External Translation", default=None)
     args = parser.parse_args()
 
     tts_kwargs = {
@@ -646,9 +676,17 @@ def main():
         "ref_audio": args.ref_audio  # Add explicit ref_audio support for Qwen Design->Clone handoff
     }
 
+    # Pass External API args to kwargs for use in translation
+    extra_kwargs = {}
+    if args.api_key:
+        extra_kwargs['api_key'] = args.api_key
+        if args.base_url: extra_kwargs['base_url'] = args.base_url
+        if args.model: extra_kwargs['model'] = args.model
+
     result_data = None
     
     if args.action == "test_asr":
+        # ... (Existing ASR code) ...
         if args.input:
             if not args.json:
                 print(f"Testing ASR on {args.input} using {args.asr}", flush=True)
@@ -662,14 +700,21 @@ def main():
         else:
             print("Please provide --input to test ASR.")
             
+    elif args.action == "translate_text":
+        if args.input and args.lang:
+            result_data = translate_text(args.input, args.lang, **extra_kwargs)
+            if not args.json:
+                print(result_data)
+        else:
+            print("Usage: --action translate_text --input 'Text' --lang 'Chinese'")
+            
     elif args.action == "test_tts":
-         # ... (keep existing) ...
         # Dynamic Dispatch
         tts_service_name = getattr(args, 'tts_service', 'indextts')
         run_tts_func, _ = get_tts_runner(tts_service_name)
         
         if not run_tts_func:
-             print(f"Error: Failed to init TTS service {tts_service_name}")
+                print(f"Error: Failed to init TTS service {tts_service_name}")
         elif args.input and args.output: # Ref optional for Qwen Design
             if not args.json:
                 print(f"Testing TTS ({tts_service_name}).")
@@ -783,7 +828,9 @@ def main():
     elif args.action == "dub_video":
         if args.input and args.output:
             target = args.lang if args.lang else "English"
-            result_data = dub_video(args.input, target, args.output, asr_service=args.asr, strategy=args.strategy, **tts_kwargs)
+            # Combine tts_kwargs and extra_kwargs (for API keys)
+            combined_kwargs = {**tts_kwargs, **extra_kwargs}
+            result_data = dub_video(args.input, target, args.output, asr_service=args.asr, strategy=args.strategy, **combined_kwargs)
             if not args.json:
                 print(result_data)
         else:

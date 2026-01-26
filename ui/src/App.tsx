@@ -9,6 +9,7 @@ import Sidebar from './components/Sidebar'
 import ModelManager from './components/ModelManager';
 import TTSConfig from './components/TTSConfig';
 import WhisperConfig from './components/WhisperConfig';
+import TranslationConfig from './components/TranslationConfig';
 import CompensationStrategy from './components/CompensationStrategy';
 import ConfirmDialog from './components/ConfirmDialog';
 
@@ -51,7 +52,7 @@ function App() {
   const [dragTarget, setDragTarget] = useState<'left' | 'middle' | null>(null);
   const [asrService, setAsrService] = useState(() => localStorage.getItem('asrService') || 'whisperx');
   const [missingDeps, setMissingDeps] = useState<string[]>([]);
-  const [currentView, setCurrentView] = useState<'home' | 'models' | 'strategy' | 'tts' | 'whisper'>(() => (localStorage.getItem('currentView') as any) || 'home');
+  const [currentView, setCurrentView] = useState<'home' | 'models' | 'strategy' | 'tts' | 'whisper' | 'translation'>(() => (localStorage.getItem('currentView') as any) || 'home');
   const [mergeVersion, setMergeVersion] = useState(0);
   const [ttsService, setTtsService] = useState<'indextts' | 'qwen'>(() => (localStorage.getItem('ttsService') as any) || 'indextts');
   const [batchSize, setBatchSize] = useState(() => parseInt(localStorage.getItem('batchSize') || '1'));
@@ -489,12 +490,24 @@ function App() {
       // Prepare JSON for backend
       const inputJson = JSON.stringify(segsToUse);
 
-      const result = await (window as any).ipcRenderer.invoke('run-backend', [
+      const transApiKey = localStorage.getItem('trans_api_key') || '';
+      const transApiBaseUrl = localStorage.getItem('trans_api_base_url') || '';
+      const transApiModel = localStorage.getItem('trans_api_model') || '';
+
+      const args = [
         '--action', 'translate_text',
         '--input', inputJson,
         '--lang', targetLang,
         '--json'
-      ]);
+      ];
+
+      if (transApiKey) {
+        args.push('--api_key', transApiKey);
+        if (transApiBaseUrl) args.push('--base_url', transApiBaseUrl);
+        if (transApiModel) args.push('--model', transApiModel);
+      }
+
+      const result = await (window as any).ipcRenderer.invoke('run-backend', args);
 
       if (abortRef.current) return null;
 
@@ -504,7 +517,12 @@ function App() {
         return result.segments;
       } else {
         console.error("Translation failed:", result);
-        setStatus(`翻译失败: ${result?.error || 'Unknown'}`);
+        setStatus(`Translation Failed`);
+        setFeedback({
+          title: "翻译失败 (Translation Error)",
+          message: `API 返回错误: \n${result?.error || 'Unknown Error'}\n\n请检查您的 API Key 或网络连接。`,
+          type: 'error'
+        });
         return null;
       }
     } catch (e: any) {
@@ -1399,7 +1417,7 @@ function App() {
       <Sidebar
         activeService={currentView === 'home' ? asrService : currentView}
         onServiceChange={(s) => {
-          if (['models', 'strategy', 'tts', 'whisper'].includes(s)) {
+          if (['models', 'strategy', 'tts', 'whisper', 'translation'].includes(s)) {
             setCurrentView(s as any);
           } else {
             setAsrService(s);
@@ -1885,8 +1903,15 @@ function App() {
           `}</style>
         </div>
       )}
+
+      {currentView === 'translation' && (
+        <div style={{ flex: 1, height: '100%', overflow: 'hidden' }}>
+          <TranslationConfig />
+        </div>
+      )}
     </div>
   )
 }
+
 
 export default App
