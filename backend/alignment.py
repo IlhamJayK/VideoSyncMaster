@@ -37,8 +37,6 @@ def align_audio(input_path, output_path, target_duration_sec):
     speed_factor = current_duration / target_duration_sec
     print(f"Aligning: {current_duration:.2f}s -> {target_duration_sec:.2f}s (Speed Factor: {speed_factor:.2f}x)")
 
-    # ffmpeg 'atempo' filter is limited to [0.5, 2.0].
-    # We need to chain filters for values outside this range.
     tempo_filters = []
     remaining_factor = speed_factor
 
@@ -49,14 +47,12 @@ def align_audio(input_path, output_path, target_duration_sec):
         tempo_filters.append(0.5)
         remaining_factor /= 0.5
     
-    # Append the last necessary factor (now guaranteed to be within [0.5, 2.0] unless it was 1.0)
     if abs(remaining_factor - 1.0) > 0.01: # Only if not effectively 1.0
         tempo_filters.append(remaining_factor)
 
     try:
         stream = ffmpeg.input(input_path)
         
-        # Chain filters
         for t in tempo_filters:
             stream = stream.filter('atempo', t)
             
@@ -101,11 +97,8 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
             return False
             
         target_sr = 44100
-        # Calculate total samples needed (add a bit of buffer if needed, but video_duration should be exact)
         total_samples = int(video_duration * target_sr) + 1
         
-        # Initialize stereo buffer (change to 1 if mono desired, but stereo is safer)
-        # Using float32 for mixing to avoid clipping issues before final normalization/clipping
         mixed_audio = np.zeros((total_samples, 2), dtype=np.float32)
 
         print(f"[Mixer] Initialized buffer: {video_duration:.2f}s ({total_samples} samples)", flush=True)
@@ -127,49 +120,36 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
 
                 y, _ = librosa.load(file_path, sr=target_sr, mono=False)
                 
-                # Check shape. If mono (N,), reshape to (1, N)
                 if y.ndim == 1:
                     y = y.reshape(1, -1)
                 
-                # Ensure stereo for mixing: shape (2, N)
                 if y.shape[0] == 1:
                     y = np.repeat(y, 2, axis=0)
                 elif y.shape[0] > 2:
-                    y = y[:2, :] # Take first 2 channels
+                    y = y[:2, :] 
                 
-                # Transpose to (N, 2) to match our buffer
                 y = y.T 
                 
-                # Apply volume boost (1.2x) as per original logic
                 y = y * 1.2
                 
-                # Length to add
                 seg_samples = y.shape[0]
                 
-                # Calculate end index considering boundary
                 end_idx = start_idx + seg_samples
                 if end_idx > total_samples:
-                    # Clip segment if it extends beyond video
                     y = y[:total_samples - start_idx]
                     end_idx = total_samples
                 
-                # Add to buffer
                 mixed_audio[start_idx:end_idx] += y
                 
             except Exception as e:
                 print(f"[Mixer] Error processing segment {file_path}: {e}")
                 continue
 
-        # 3. Save mixed audio to a temp file
-        # Normalize if necessary? standard logic often clips. 
-        # Let's simple clip to [-1.0, 1.0] to avoid distortion if multiple oversaturate, 
-        # though 1.2x on single track is usually fine.
         max_val = np.max(np.abs(mixed_audio))
         if max_val > 1.0:
             print(f"[Mixer] Audio amplitude {max_val:.2f} > 1.0, normalizing.")
             mixed_audio = mixed_audio / max_val
         
-        # Create temp file
         fd, temp_mixed_path = tempfile.mkstemp(suffix='.wav')
         os.close(fd)
         
@@ -178,15 +158,12 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
         
         print("[PROGRESS] 50", flush=True)
 
-        # 4. Mux with original video using FFMPEG
         input_video = ffmpeg.input(video_path)
         input_audio = ffmpeg.input(temp_mixed_path)
         
-        # Use video stream from original, audio from temp
         v = input_video['v']
         a = input_audio['a']
         
-        # -c:v copy (fast), -c:a aac
         stream = ffmpeg.output(v, a, output_path, vcodec='copy', acodec='aac', shortest=None)
         
         ffmpeg.run(stream, overwrite_output=True, quiet=False)
@@ -201,7 +178,6 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
         traceback.print_exc()
         return False
     finally:
-        # Cleanup temp file
         if temp_mixed_path and os.path.exists(temp_mixed_path):
             try:
                 os.remove(temp_mixed_path)
@@ -210,19 +186,11 @@ def merge_audios_to_video(video_path, audio_segments, output_path, strategy='aut
 
 def get_rife_executable():
     """Locate rife-ncnn-vulkan executable."""
-    # Logic: Search in ../models/rife
-    # APP_ROOT logic from main.py is harder to access here without passing it.
-    # But usually models are in ../models relative to backend (in dev) or ../../models (in prod).
-    # Let's try likely paths.
-    
     current_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # 1. Check strict Project/models/rife
-    # Need to traverse up to find 'models'
-    # Start with assumption of standard structure
     candidates = [
-        os.path.join(current_dir, "..", "models", "rife"), # Dev: backend/../models
-        os.path.join(current_dir, "..", "..", "models", "rife"), # Prod: resources/backend/../../models
+        os.path.join(current_dir, "..", "models", "rife"),
+        os.path.join(current_dir, "..", "..", "models", "rife"),
         os.path.join(current_dir, "models", "rife")
     ]
     
@@ -231,13 +199,10 @@ def get_rife_executable():
     
     for root in candidates:
         if os.path.exists(root):
-            # DFS for exe
             for dirpath, dirnames, filenames in os.walk(root):
                 for f in filenames:
                     if f.lower() == 'rife-ncnn-vulkan.exe':
                         rife_exe = os.path.join(dirpath, f)
-                        # Look for model
-                        # Usually in same dir
                         if os.path.exists(os.path.join(dirpath, 'rife-v4.6')):
                              rife_model_path = 'rife-v4.6'
                         break
@@ -257,12 +222,10 @@ def apply_rife_interpolation(input_path, output_path, target_duration):
         print("[RIFE] Executable not found. Please download RIFE in Model Manager.")
         return False
         
-    # Get info
     try:
         probe = ffmpeg.probe(input_path)
         video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
         orig_duration = float(probe['format']['duration'])
-        # If duration is tiny, use video stream duration tag?
         if orig_duration < 0.01 and video_stream:
              orig_duration = float(video_stream.get('duration', 0.1))
     except:
@@ -272,64 +235,159 @@ def apply_rife_interpolation(input_path, output_path, target_duration):
     
     raw_factor = target_duration / orig_duration
     
-    # Calculate how many 2x passes needed
-    # 2^n >= raw_factor
     import math
     if raw_factor <= 1.0:
-        # No interpolation needed for length, just copy?
-        # But maybe we want smoothness? 
-        # If strategy is RIFE, user likely wants smoothness even if strictly fitting.
-        # But 'merge_video_advanced' only calls this if we need to slow down (duration extension).
         pass_count = 0
     else:
         pass_count = math.ceil(math.log2(raw_factor))
         
-    if pass_count < 1: pass_count = 1 # At least one pass if invoked
+    if pass_count < 1: pass_count = 1
     
     print(f"[RIFE] Interpolating {input_path} ({orig_duration:.2f}s) to ~{target_duration:.2f}s. Factor={raw_factor:.2f}. Passes={pass_count}")
     
     current_in = input_path
     
+    import math
     import shutil
     import subprocess
-    
-    work_dir = os.path.dirname(output_path)
-    
-    success = True
-    
-    for i in range(pass_count):
-        temp_out = os.path.join(work_dir, f"rife_pass_{i}.mp4")
+    import uuid
+
+    rife_exe, rife_model = get_rife_executable()
+    if not rife_exe:
+        print("[RIFE] Executable not found. Please download RIFE in Model Manager.")
+        return False
         
-        cmd = [rife_exe, '-i', current_in, '-o', temp_out]
+    # Get video info
+    try:
+        probe = ffmpeg.probe(input_path)
+        video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+        
+        # Get frame count and fps
+        orig_frames = int(video_stream.get('nb_frames', 0))
+        # If nb_frames is missing (common in some streams), estimate from duration * fps
+        if orig_frames == 0:
+             duration = float(video_stream.get('duration', probe['format']['duration']))
+             fps_eval = video_stream.get('r_frame_rate', '30/1')
+             if '/' in fps_eval:
+                 num, den = map(int, fps_eval.split('/'))
+                 fps = num / den
+             else:
+                 fps = float(fps_eval)
+             orig_frames = int(duration * fps)
+        else:
+             fps_eval = video_stream.get('r_frame_rate', '30/1')
+             if '/' in fps_eval:
+                 num, den = map(int, fps_eval.split('/'))
+                 fps = num / den
+             else:
+                 fps = float(fps_eval)
+
+        orig_duration = float(probe['format']['duration'])
+        if orig_duration <= 0: orig_duration = 0.1
+        
+    except Exception as e:
+        print(f"[RIFE] Error probing input: {e}")
+        return False
+
+    # Calculate target frame count
+    # scale_factor = target_duration / orig_duration
+    # target_frames = orig_frames * scale_factor
+    target_frames = int(orig_frames * (target_duration / orig_duration))
+    
+    # Sanity check
+    if target_frames < orig_frames: target_frames = orig_frames # Should not happen with our "No Speedup" logic, but safety first
+    if target_frames == orig_frames:
+         # No interpolation needed? Just copy?
+         # But maybe user wants "smoothness" via RIFE even if same duration? 
+         # usually logic is duration change. If same, RIFE 1x is identity?
+         pass
+
+    print(f"[RIFE] Interpolating {input_path} ({orig_duration:.2f}s, {orig_frames} frames) -> {target_duration:.2f}s ({target_frames} frames). FPS: {fps}")
+
+    # Setup Cache Directories
+    # Use .cache/rife/work_<uuid>
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # From backend/alignment.py -> Backend -> Root ? 
+    # Actually explicit path provided by user: .cache/rife
+    # Let's try to find root relative to this file: e:\VideoSyncMaster\backend\alignment.py -> e:\VideoSyncMaster
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cache_root = os.path.join(root_dir, '.cache', 'rife')
+    
+    unique_id = uuid.uuid4().hex[:8]
+    work_dir = os.path.join(cache_root, f"work_{unique_id}")
+    frames_in = os.path.join(work_dir, "frames_in")
+    frames_out = os.path.join(work_dir, "frames_out")
+    
+    os.makedirs(frames_in, exist_ok=True)
+    os.makedirs(frames_out, exist_ok=True)
+    
+    success = False
+    
+    try:
+        # 1. Extract Frames
+        print(f"  [RIFE] Extracting frames to {frames_in}...")
+        (
+            ffmpeg
+            .input(input_path)
+            .output(os.path.join(frames_in, '%08d.png'), **{'q:v': 2}) # High quality JPG or PNG. PNG is default if extension is png
+            .run(quiet=True, overwrite_output=True)
+        )
+        
+        # 2. Run RIFE
+        cmd = [
+            rife_exe,
+            '-i', frames_in,
+            '-o', frames_out,
+            '-n', str(target_frames),
+            '-g', '0' # Force GPU 0
+        ]
         if rife_model:
             cmd.extend(['-m', rife_model])
             
-        print(f"  [RIFE] Pass {i+1}/{pass_count}: Running...")
-        # print(cmd)
+        print(f"  [RIFE] Running interpolation (Target: {target_frames} frames)...")
         
-        try:
-            # Hide output logic?
-            # subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-            subprocess.run(cmd, check=True)
-            
-            if i > 0 and current_in != input_path:
-                try: os.remove(current_in)
-                except: pass
-                
-            current_in = temp_out
-        except Exception as e:
-            print(f"  [RIFE] Failed at pass {i}: {e}")
-            success = False
-            break
-            
-    if success:
-        if os.path.exists(output_path):
-            try: os.remove(output_path)
-            except: pass
-        os.rename(current_in, output_path)
-        return True
-    else:
-        return False
+        res = subprocess.run(
+            cmd, 
+            check=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8', 
+            errors='replace'
+        )
+        # print(res.stdout) 
+        
+        # 3. Assemble Video
+        # Input: Interpolated frames. 
+        # Output: Video with duration = target_duration.
+        # So we must play 'target_frames' at 'fps' rate? 
+        # Wait, if we keep 'fps', duration = target_frames / fps = (orig * scale) / fps = (time * fps * scale) / fps = time * scale = target_time.
+        # Yes, keeping original FPS is correct for Slow Motion effect.
+        
+        print(f"  [RIFE] Encoding result to {output_path}...")
+        (
+            ffmpeg
+            .input(os.path.join(frames_out, '%08d.png'), framerate=fps)
+            .output(output_path, vcodec='libx264', pix_fmt='yuv420p', crf=18, r=fps) # crf 18 for high quality
+            .run(quiet=True, overwrite_output=True)
+        )
+        
+        success = True
+        
+    except subprocess.CalledProcessError as e:
+        print(f"  [RIFE] Process Failed: {e.stderr}")
+    except Exception as e:
+        print(f"  [RIFE] Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Cleanup
+        if os.path.exists(work_dir):
+            try:
+                shutil.rmtree(work_dir)
+            except Exception as e:
+                 print(f"  [RIFE] Warning: Failed to cleanup temp dir {work_dir}: {e}")
+                 
+    return success
 
 def merge_video_advanced(video_path, audio_segments, output_path, strategy):
     """
@@ -357,23 +415,18 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
             shutil.rmtree(chunk_dir)
         os.makedirs(chunk_dir, exist_ok=True)
         
-        # Use 'source_cursor' to track progress in the ORIGINAL video timeline
         source_cursor = 0.0
         
         for i, seg in enumerate(sorted_segments):
             seg_start = float(seg['start'])
             seg_audio_path = seg['path']
-            # Assume main.py now passes 'duration' (original slot duration)
             slot_dur = float(seg.get('duration', 0))
             
-            # Sanity check: Ensure slot_dur is valid.
             if slot_dur <= 0.01:
                 audio_len = get_audio_duration(seg_audio_path) or 3.0
                 print(f"  [Seg {i}] Warning: Invalid slot_dur {slot_dur}, referencing audio len {audio_len}s")
                 slot_dur = audio_len
 
-            # 1. Handle Gap (Space between previous segment end and this segment start)
-            # Gap Video: Video content from [source_cursor] to [seg_start]
             if seg_start > source_cursor:
                 gap_dur = seg_start - source_cursor
                 if gap_dur > 0.1: # Ignore tiny gaps (<0.1s, approx 3 frames)
@@ -381,12 +434,7 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                     v_chunk = os.path.join(chunk_dir, f"gap_{i}.mp4")
                     
                     try:
-                        # Video: Original content
                         input_v = ffmpeg.input(video_path, ss=source_cursor, t=gap_dur)['v']
-                        # Audio: Silent (or we could copy original audio for ambient? User usually wants dub only)
-                        # Let's stick to silence for dubbing mode to ensure clean background if requested, 
-                        # but usually dubbing implies retaining background music? 
-                        # This function is 'merge_audios_to_video', usually replacing audio.
                         input_a = ffmpeg.input(f"anullsrc=channel_layout=stereo:sample_rate=44100", f='lavfi', t=gap_dur)
                         
                         (
@@ -398,15 +446,10 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                     except ffmpeg.Error as e:
                         print(f"Gap generation error: {e.stderr.decode() if e.stderr else str(e)}")
                 
-                # Advance source cursor to start of this segment
                 source_cursor = seg_start
             
-            # 2. Handle Segment
-            # If overlap (seg_start < source_cursor), we start extracting from source_cursor
-            # effectively trimming the start of the video slot to maintain continuity.
             effective_video_start = max(seg_start, source_cursor)
             
-            # Calc scale factor based on audio length
             seg_audio_dur = get_audio_duration(seg_audio_path) or 0.1
             
             scale_factor = seg_audio_dur / slot_dur
@@ -415,31 +458,20 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
             
             v_chunk_seg = os.path.join(chunk_dir, f"seg_{i}.mp4")
             
-            # Extract Video Slot
             stream_v = ffmpeg.input(video_path, ss=effective_video_start, t=slot_dur)['v']
             stream_a = ffmpeg.input(seg_audio_path)
             
-            # Prepare Video Filter
             v_filters = []
             
             if scale_factor > 1.05 and strategy != 'auto_speedup':
                 if strategy == 'frame_blend':
-                    # Slow down video: setpts=FACTOR*PTS
                     v_filters.append(('setpts', [f"{scale_factor}*PTS"], {}))
-                    # Frame blending: minterpolate=mi_mode=blend
                     v_filters.append(('minterpolate', [], {'mi_mode': 'blend'}))
                 elif strategy == 'freeze_frame':
-                    # Freeze frame: tpad
-                    # We want total video duration = seg_audio_dur.
-                    # Current video duration = slot_dur.
                     pad_dur = seg_audio_dur - slot_dur
                     if pad_dur > 0:
-                        # stop_mode=clone freezes the last frame
-                        # Add a safety buffer (0.5s) to ensure the freeze covers the entire audio
-                        # We will strictly trim the output using 't' parameter below to ensure perfect sync
                         v_filters.append(('tpad', [], {'stop_mode': 'clone', 'stop_duration': str(pad_dur + 0.5)}))
                 elif strategy == 'rife':
-                     # RIFE Interpolation
                      raw_chunk = os.path.join(chunk_dir, f"rife_in_{i}.mp4")
                      rife_out = os.path.join(chunk_dir, f"rife_out_{i}.mp4")
                      
@@ -452,6 +484,9 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                             .run(overwrite_output=True, quiet=True)
                          )
                          
+                         # RIFE Interpolation only makes sense if we are actually extending duration
+                         # Pass seg_audio_dur as target. Since scale_factor >= 1.0 here (due to check above),
+                         # seg_audio_dur >= slot_dur.
                          if apply_rife_interpolation(raw_chunk, rife_out, seg_audio_dur):
                              rife_success = True
                              stream_v = ffmpeg.input(rife_out)['v']
@@ -460,10 +495,10 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                      except Exception as e:
                          print(f"  [Seg {i}] RIFE prep failed: {e}")
                      
-                     v_filters.append(('setpts', [f"{scale_factor}*PTS"], {}))
+                     if not rife_success:
+                         v_filters.append(('setpts', [f"{scale_factor}*PTS"], {}))
             
             else:
-                 # Standard behavior or auto_speedup (if it reached here for some reason)
                  if abs(scale_factor - 1.0) > 0.02:
                      v_filters.append(('setpts', [f"{scale_factor}*PTS"], {}))
 
@@ -476,13 +511,11 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
                 'b:v': '4M', 
                 'preset': 'fast',
                 'r': 30, # Enforce 30fps to avoid VFR sync issues in concat
-                # 'shortest': None # We will use explicit 't' instead
             }
             
-            # Enforce strict duration to match audio exactly
-            # This ensures the "freeze" releases exactly when the audio line finishes
-            if seg_audio_dur > 0:
-                 output_args['t'] = seg_audio_dur
+            target_dur = slot_dur * scale_factor
+            if target_dur > 0:
+                 output_args['t'] = target_dur
             
             out_stream = stream_v
             if v_filters:
@@ -499,10 +532,8 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
             except ffmpeg.Error as e:
                  print(f"Seg generation error {i}: {e.stderr.decode() if e.stderr else str(e)}")
             
-            # Update source_cursor to end of this slot
             source_cursor = effective_video_start + slot_dur
             
-        # 3. Handle Tail
         probe = ffmpeg.probe(video_path)
         total_duration = float(probe['format']['duration'])
         
@@ -522,7 +553,6 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
             except Exception as e:
                 print(f"Tail error: {e}")
 
-        # 4. Concat all
         if not clips_list:
             print("No clips generated.")
             return False
@@ -532,7 +562,6 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
         concat_list_path = os.path.join(chunk_dir, "concat.txt")
         with open(concat_list_path, 'w', encoding='utf-8') as f:
             for clip in clips_list:
-                # FFMPEG concat requires safe paths
                 safe_path = clip.replace('\\', '/')
                 f.write(f"file '{safe_path}'\n")
         
@@ -548,7 +577,6 @@ def merge_video_advanced(video_path, audio_segments, output_path, strategy):
             print(f"Concat error: {e.stderr.decode() if e.stderr else str(e)}")
             return False
             
-        # Cleanup
         try:
             shutil.rmtree(chunk_dir)
         except: 
