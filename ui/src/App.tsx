@@ -1092,12 +1092,25 @@ function App() {
 
     try {
       const sourceText = segments[index].text;
-      const result = await (window as any).ipcRenderer.invoke('run-backend', [
+
+      const transApiKey = localStorage.getItem('trans_api_key') || '';
+      const transApiBaseUrl = localStorage.getItem('trans_api_base_url') || '';
+      const transApiModel = localStorage.getItem('trans_api_model') || '';
+
+      const args = [
         '--action', 'translate_text',
         '--input', sourceText,
         '--lang', targetLang,
         '--json'
-      ]);
+      ];
+
+      if (transApiKey) {
+        args.push('--api_key', transApiKey);
+        if (transApiBaseUrl) args.push('--base_url', transApiBaseUrl);
+        if (transApiModel) args.push('--model', transApiModel);
+      }
+
+      const result = await (window as any).ipcRenderer.invoke('run-backend', args);
 
       if (result && result.success) {
         // Handle both simple text return and segment list return
