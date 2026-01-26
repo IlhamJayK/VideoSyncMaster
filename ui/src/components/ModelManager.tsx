@@ -144,6 +144,7 @@ const ModelManager: React.FC<ModelManagerProps> = ({ themeMode }) => {
         { key: 'alignment', name: 'Forced Alignment', desc: '语音强制对齐模型 (Wav2Vec2)', link: 'Models/alignment' },
         { key: 'index_tts', name: 'Index-TTS', desc: 'Index-TTS 语音克隆模型', link: 'Models/index-tts' },
 
+        { key: 'qwen', name: 'Qwen 2.5 7B', desc: 'Qwen 2.5 7B Instruct 模型', link: 'Models/Qwen2.5-7B-Instruct' },
         { key: 'qwen_tokenizer', name: 'Qwen3 Tokenizer', desc: 'Qwen3 分词器 (Tokenizer-12Hz)', link: 'Models/Qwen3-TTS-Tokenizer-12Hz' },
 
         { key: 'qwen_17b_base', name: 'Qwen3 1.7B Base', desc: 'Qwen3 声音克隆 (基础模型, 1.7B)', link: 'Models/Qwen3-TTS-12Hz-1.7B-Base' },

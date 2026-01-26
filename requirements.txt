@@ -1,4 +1,4 @@
-torch>=2.6.0
+torch==2.7.1
 accelerate==1.8.1
 transformers==4.52.1
 bitsandbytes
@@ -6,6 +6,9 @@ modelscope
 tqdm>=4.67.1
 langdetect
 pydub
+
+torchvision==0.22.1
+torchaudio==2.7.1
 
 # ASR & Audio Processing
 openai-whisper
